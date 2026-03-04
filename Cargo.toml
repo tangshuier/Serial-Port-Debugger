@@ -1,0 +1,42 @@
+[package]
+name = "serial_monitor"
+version = "1.0.1"
+edition = "2024"
+
+[package.metadata.winres]
+ProductName = "串口调试器"
+FileDescription = "串口调试器"
+OriginalFilename = "串口调试器.exe"
+
+[[bin]]
+name = "串口调试器"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.26.0"
+egui = "0.26.0"
+serialport = "4.2.0"
+tokio = { version = "1.35.0", features = ["full"] }
+encoding_rs = "0.8.33"
+directories = "5.0.1"
+toml = "0.8.10"
+serde = { version = "1.0.203", features = ["derive"] }
+image = "0.24.9"
+rfd = "0.14.0"
+
+[build-dependencies]
+winres = "0.1.12"
+image = "0.24.9"
+
+[profile.release]
+opt-level = "z"  # 优化大小
+lto = true       # 链接时优化
+codegen-units = 1  # 减少代码生成单元以提高优化效果
+panic = "abort"  # 中止而不是展开以减小大小
+
+# 静态链接配置
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.i686-pc-windows-msvc]
+runtime = "static"
