@@ -45,7 +45,9 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                 } else {
                                     // 无更新，显示提示
                                     ctx.request_repaint();
-                                    // 这里可以添加一个无更新的提示
+                                    // 显示无更新的提示
+                                    // 使用全局原子变量通知主线程
+                                    crate::NO_UPDATE_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
                                 }
                             },
                             Err(e) => {
