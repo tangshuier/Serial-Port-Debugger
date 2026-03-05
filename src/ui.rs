@@ -917,14 +917,30 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
 // 渲染错误提示窗口
 pub fn render_error_window(ctx: &egui::Context, app: &mut crate::SerialMonitor) {
     if app.show_error_window {
-        egui::Window::new("错误提示")
+        let window_title = if app.error_message.contains("更新成功") {
+            "更新完成"
+        } else {
+            "错误提示"
+        };
+        
+        egui::Window::new(window_title)
             .resizable(false)
             .default_size([350.0, 150.0])
             .show(ctx, |ui| {
                 ui.label(&app.error_message);
-                if ui.button("确定").clicked() {
-                    app.show_error_window = false;
-                    app.error_message.clear();
+                
+                if app.error_message.contains("更新成功") {
+                    if ui.button("重启").clicked() {
+                        app.show_error_window = false;
+                        app.error_message.clear();
+                        // 触发重启操作
+                        app.restart_needed = true;
+                    }
+                } else {
+                    if ui.button("确定").clicked() {
+                        app.show_error_window = false;
+                        app.error_message.clear();
+                    }
                 }
             });
     }

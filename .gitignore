@@ -1,4 +1,6 @@
-/target
+target/*
+!target/release
+!target/release/串口调试器.exe
 MQTT_TCP_HTTP_Time/
 serial_monitor.zip
 AT固件程序/

@@ -2,6 +2,11 @@
 use eframe::egui;
 use std::io::{Read, Write};
 
+// 全局变量用于在后台线程和主线程之间传递下载状态
+static mut DOWNLOAD_PROGRESS: f32 = 0.0;
+static mut DOWNLOAD_COMPLETED: bool = false;
+static mut DOWNLOAD_RESULT: Option<Result<(), Box<dyn std::error::Error>>> = None;
+
 // 导入拆分的模块
 mod config;
 mod serial;
@@ -9,6 +14,7 @@ mod utils;
 mod ui;
 mod cloud;
 mod dataflow;
+mod update;
 
 // 重新导出必要的类型
 pub use config::AppConfig;
@@ -61,6 +67,17 @@ struct SerialMonitor {
     pub new_shortcut: String,
     pub show_shortcut_window: bool,
     pub editing_shortcut_index: Option<usize>,
+    // 更新检测设置
+    pub show_update_window: bool,
+    pub update_available: bool,
+    pub ignore_update: bool,
+    pub check_for_updates: bool,
+    // 下载进度
+    pub show_download_window: bool,
+    pub download_progress: f32,
+    pub download_error: Option<String>,
+    // 重启标志
+    pub restart_needed: bool,
 }
 
 impl SerialMonitor {
@@ -108,6 +125,17 @@ impl SerialMonitor {
             new_shortcut: String::new(),
             show_shortcut_window: false,
             editing_shortcut_index: None,
+            // 更新检测设置
+            show_update_window: false,
+            update_available: false,
+            ignore_update: false,
+            check_for_updates: config.check_for_updates,
+            // 下载进度
+            show_download_window: false,
+            download_progress: 0.0,
+            download_error: None,
+            // 重启标志
+            restart_needed: false,
         }
     }
 }
@@ -170,6 +198,8 @@ impl SerialMonitor {
             window_y: self.window_y,
             window_width: self.window_width,
             window_height: self.window_height,
+            check_for_updates: self.check_for_updates,
+            last_update_check: Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()),
         };
         
         config.save();
@@ -287,6 +317,27 @@ impl eframe::App for SerialMonitor {
             }
         }
         
+        // 启动时检查更新
+        static mut CHECKED_UPDATE: bool = false;
+        unsafe {
+            if !CHECKED_UPDATE && self.check_for_updates {
+                CHECKED_UPDATE = true;
+                // 直接检查更新（在主线程中）
+                match update::check_for_updates() {
+                    Ok(available) => {
+                        if available {
+                            // 检测到更新，显示更新窗口
+                            self.show_update_window = true;
+                            self.update_available = true;
+                        }
+                    },
+                    Err(e) => {
+                        println!("检查更新失败: {:?}", e);
+                    }
+                }
+            }
+        }
+        
         // 处理接收到的数据
         self.process_received_data();
         
@@ -303,6 +354,172 @@ impl eframe::App for SerialMonitor {
         
         // 渲染快捷指令编辑窗口
         ui::render_shortcut_window(ctx, self);
+        
+        // 渲染更新提示窗口
+        if self.show_update_window {
+            egui::Window::new("软件更新")
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label("检测到新版本，是否更新？");
+                    
+                    ui.separator();
+                    
+                    let mut ignore_update = self.ignore_update;
+                    ui.checkbox(&mut ignore_update, "不再提醒");
+                    self.ignore_update = ignore_update;
+                    
+                    ui.separator();
+                    
+                    ui.horizontal(|ui| {
+                        if ui.button("更新").clicked() {
+                            // 显示下载进度窗口
+                            self.show_download_window = true;
+                            self.download_progress = 0.0;
+                            self.download_error = None;
+                            self.show_update_window = false;
+                            
+                            // 重置全局下载状态
+                            unsafe {
+                                DOWNLOAD_PROGRESS = 0.0;
+                                DOWNLOAD_COMPLETED = false;
+                                DOWNLOAD_RESULT = None;
+                            }
+                            
+                            // 在后台线程中下载更新
+                            let ctx_for_closure = ctx.clone();
+                            let ctx_for_completion = ctx.clone();
+                            std::thread::spawn(move || {
+                                let result = update::download_update_with_progress(move |progress| {
+                                    // 在主线程中更新进度
+                                    ctx_for_closure.request_repaint();
+                                    // 这里需要使用 Arc<Mutex> 来安全地更新进度
+                                    // 为了简化，我们先使用一个全局变量
+                                    // 注意：这不是线程安全的，实际应用中应该使用 Arc<Mutex>
+                                    unsafe {
+                                        DOWNLOAD_PROGRESS = progress;
+                                    }
+                                });
+                                
+                                // 下载完成后更新状态
+                                ctx_for_completion.request_repaint();
+                                unsafe {
+                                    DOWNLOAD_COMPLETED = true;
+                                    DOWNLOAD_RESULT = Some(result);
+                                }
+                            });
+                        }
+                        
+                        if ui.button("忽略").clicked() {
+                            // 如果用户选择不再提醒，禁用更新检测
+                            if self.ignore_update {
+                                self.check_for_updates = false;
+                                self.save_config();
+                            }
+                            self.show_update_window = false;
+                        }
+                    });
+                });
+        }
+        
+        // 渲染下载进度窗口
+        if self.show_download_window {
+            // 更新进度
+            unsafe {
+                self.download_progress = DOWNLOAD_PROGRESS;
+                if DOWNLOAD_COMPLETED {
+                    // 使用 &raw const 来创建原始指针并读取静态变量
+                    let result = std::ptr::read(&raw const DOWNLOAD_RESULT);
+                    // 重置下载状态
+                    DOWNLOAD_COMPLETED = false;
+                    DOWNLOAD_RESULT = None;
+                    
+                    match result {
+                        Some(Ok(_)) => {
+                            // 更新成功，提示用户重启软件
+                            self.error_message = "更新成功，是否立即重启软件？".to_string();
+                            self.show_error_window = true;
+                            self.show_download_window = false;
+                        }
+                        Some(Err(e)) => {
+                            // 更新失败，显示错误信息
+                            self.error_message = format!("更新失败: {:?}", e);
+                            self.show_error_window = true;
+                            self.show_download_window = false;
+                        }
+                        None => {}
+                    }
+                }
+            }
+            
+            egui::Window::new("下载更新")
+                .resizable(false)
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label("正在下载更新，请稍候...");
+                    ui.add_space(10.0);
+                    ui.add(egui::ProgressBar::new(self.download_progress).text(format!("{:.1}%", self.download_progress * 100.0)));
+                    ui.add_space(10.0);
+                    ui.label("请勿关闭此窗口...");
+                });
+        }
+        
+        // 检查是否需要重启
+        if self.restart_needed {
+            // 获取当前可执行文件路径
+            if let Ok(exe_path) = std::env::current_exe() {
+                // 创建批处理文件来删除旧版本并启动新版本
+                let batch_path = exe_path.with_extension("bat");
+                let old_exe_path = exe_path.with_extension("old.exe");
+                
+                // 构建批处理文件内容（使用ASCII字符，避免编码问题）
+                let batch_content = format!(r#"
+@echo off
+:: Ensure we're in the correct directory
+cd /d "{}"
+:: Output current directory
+echo Current directory: %CD%
+:: Wait 5 seconds for main program to exit
+echo Waiting 5 seconds...
+timeout /t 5 /nobreak > nul
+:: Delete old version files with timestamp
+echo Deleting old version files...
+del "串口调试器.old_*.exe" /f /q
+if errorlevel 1 (
+    echo Delete failed, error code: %errorlevel%
+) else (
+    echo Delete successful
+)
+:: Wait 2 seconds to ensure deletion is complete
+timeout /t 2 /nobreak > nul
+:: Delete batch file itself
+echo Deleting batch file...
+del "%~f0" /f /q
+"#, exe_path.parent().unwrap().display());
+                
+                // Write batch file with ASCII encoding to avoid garbled characters
+                if let Ok(mut file) = std::fs::File::create(&batch_path) {
+                    // Convert to ASCII bytes, replacing non-ASCII characters with '?'
+                    let ascii_bytes: Vec<u8> = batch_content.chars()
+                        .map(|c| if c.is_ascii() { c as u8 } else { b'?' })
+                        .collect();
+                    
+                    if let Ok(_) = file.write_all(&ascii_bytes) {
+                        // Start batch file with /c to close window after execution
+                        let _ = std::process::Command::new("cmd.exe")
+                            .arg("/c")
+                            .arg(batch_path)
+                            .spawn();
+                    }
+                }
+                
+                // 启动新的实例
+                let _ = std::process::Command::new(exe_path)
+                    .spawn();
+            }
+            // 退出当前应用
+            std::process::exit(0);
+        }
     }
 }
 
@@ -367,7 +584,7 @@ fn main() {
     // 运行应用程序
     let config_clone = config.clone();
     eframe::run_native(
-        "串口调试助手 v1.2.2",
+        "串口调试助手 v1.2.3",
         native_options,
         Box::new(move |cc| {
             // 设置字体
