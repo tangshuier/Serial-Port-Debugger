@@ -971,6 +971,8 @@ pub fn render_error_window(ctx: &egui::Context, app: &mut crate::SerialMonitor) 
     if app.show_error_window {
         let window_title = if app.error_message.contains("更新成功") {
             "更新完成"
+        } else if app.error_message.contains("当前已是最新版本") {
+            "更新提示"
         } else {
             "错误提示"
         };
@@ -988,6 +990,37 @@ pub fn render_error_window(ctx: &egui::Context, app: &mut crate::SerialMonitor) 
                         // 触发重启操作
                         app.restart_needed = true;
                     }
+                } else if app.error_message.contains("当前已是最新版本") {
+                    ui.horizontal(|ui| {
+                        if ui.button("确定").clicked() {
+                            app.show_error_window = false;
+                            app.error_message.clear();
+                        }
+                        if ui.button("更多版本").clicked() {
+                            app.show_error_window = false;
+                            app.error_message.clear();
+                            // 显示版本列表窗口
+                            app.show_versions_window = true;
+                            app.is_loading_versions = true;
+                            
+                            // 在后台线程中获取所有版本
+                            let ctx = ctx.clone();
+                            std::thread::spawn(move || {
+                                match crate::update::get_all_versions() {
+                                    Ok(versions) => {
+                                        // 更新版本列表
+                                        *crate::VERSIONS.lock().unwrap() = versions;
+                                        // 通知主线程
+                                        ctx.request_repaint();
+                                        crate::VERSIONS_LOADED.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    },
+                                    Err(e) => {
+                                        println!("获取版本列表失败: {:?}", e);
+                                    }
+                                }
+                            });
+                        }
+                    });
                 } else {
                     if ui.button("确定").clicked() {
                         app.show_error_window = false;

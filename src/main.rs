@@ -11,6 +11,14 @@ static mut DOWNLOAD_RESULT: Option<Result<(), Box<dyn std::error::Error>>> = Non
 use std::sync::atomic::AtomicBool;
 static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 static NO_UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
+static VERSIONS_LOADED: AtomicBool = AtomicBool::new(false);
+
+// 全局变量用于存储版本列表
+use std::sync::{Arc, Mutex};
+lazy_static::lazy_static! {
+    pub static ref VERSIONS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+}
+
 
 // 导入拆分的模块
 mod config;
@@ -89,6 +97,10 @@ struct SerialMonitor {
     pub restart_needed: bool,
     // 更新检查状态
     pub is_checking_update: bool,
+    // 版本列表窗口
+    pub show_versions_window: bool,
+    pub versions: Vec<String>,
+    pub is_loading_versions: bool,
 }
 
 impl SerialMonitor {
@@ -153,6 +165,10 @@ impl SerialMonitor {
             restart_needed: false,
             // 更新检查状态
             is_checking_update: false,
+            // 版本列表窗口
+            show_versions_window: false,
+            versions: Vec::new(),
+            is_loading_versions: false,
         }
     }
 }
@@ -409,6 +425,15 @@ impl eframe::App for SerialMonitor {
             // 暂时简单处理，每次更新循环都重置
             // 实际应用中应该根据具体情况处理
             // self.is_checking_update = false;
+            
+            // 检查版本列表是否加载完成
+            if VERSIONS_LOADED.load(std::sync::atomic::Ordering::Relaxed) {
+                VERSIONS_LOADED.store(false, std::sync::atomic::Ordering::Relaxed);
+                // 获取版本列表
+                self.versions = VERSIONS.lock().unwrap().clone();
+                // 重置加载状态
+                self.is_loading_versions = false;
+            }
         }
         
         // 处理接收到的数据
@@ -427,6 +452,36 @@ impl eframe::App for SerialMonitor {
         
         // 渲染快捷指令编辑窗口
         ui::render_shortcut_window(ctx, self);
+        
+        // 渲染版本列表窗口
+        if self.show_versions_window {
+            egui::Window::new("所有版本")
+                .resizable(false)
+                .default_size([300.0, 200.0])
+                .show(ctx, |ui| {
+                    ui.heading("可用版本列表");
+                    
+                    if self.is_loading_versions {
+                        ui.label("正在加载版本列表...");
+                    } else if self.versions.is_empty() {
+                        ui.label("未找到版本列表");
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .max_height(120.0) // 限制滚动区域高度，大约显示5个版本
+                            .auto_shrink([false; 2])
+                            .show(ui, |ui| {
+                                for version in &self.versions {
+                                    ui.label(version);
+                                }
+                            });
+                    }
+                    
+                    ui.add_space(10.0);
+                    if ui.button("关闭").clicked() {
+                        self.show_versions_window = false;
+                    }
+                });
+        }
         
         // 渲染更新提示窗口
         if self.show_update_window {

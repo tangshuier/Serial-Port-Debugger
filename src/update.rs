@@ -91,6 +91,41 @@ pub fn get_current_branch() -> String {
     get_update_branch()
 }
 
+// 获取所有版本（分支）
+pub fn get_all_versions() -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let api_url = format!(
+        "https://api.github.com/repos/{}/{}/branches",
+        REPO_OWNER, REPO_NAME
+    );
+    
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Serial-Monitor/1.0")
+        .timeout(Duration::from_secs(30))
+        .build()?;
+    
+    let response = client.get(&api_url).send()?;
+    
+    if !response.status().is_success() {
+        return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
+    }
+    
+    let branches: serde_json::Value = response.json()?;
+    let mut versions = Vec::new();
+    
+    if let Some(branch_array) = branches.as_array() {
+        for branch in branch_array {
+            if let Some(name) = branch["name"].as_str() {
+                // 只包含以Serial-Port-Debugger开头的分支
+                if name.starts_with("Serial-Port-Debugger") {
+                    versions.push(name.to_string());
+                }
+            }
+        }
+    }
+    
+    Ok(versions)
+}
+
 // 检查是否有更新（仅使用版本号）
 pub fn check_for_updates() -> Result<bool, Box<dyn std::error::Error>> {
     // 获取本地版本号
