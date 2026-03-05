@@ -1,22 +1,17 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use sha1::Digest;
+use crate::AppConfig;
 
 // GitHub 仓库信息
 const REPO_OWNER: &str = "tangshuier";
 const REPO_NAME: &str = "Serial-Port-Debugger";
 const TARGET_FILE: &str = "target/release/串口调试器.exe";
-const CACHE_FILE: &str = ".update_cache.json";
 const CACHE_DURATION: Duration = Duration::from_secs(3600); // 缓存有效期 1 小时
 
-// 缓存结构体
-#[derive(serde::Serialize, serde::Deserialize)]
-struct Cache {
-    remote_sha: String,
-    timestamp: u64,
-}
+
 
 // 计算文件的 SHA 哈希值
 pub fn calculate_file_sha(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
@@ -69,44 +64,27 @@ pub fn calculate_remote_sha() -> Result<String, Box<dyn std::error::Error>> {
     Ok(sha)
 }
 
-// 从缓存获取远程文件的 SHA
+// 从配置获取远程文件的 SHA
 pub fn get_cached_remote_sha() -> Result<String, Box<dyn std::error::Error>> {
-    let cache_path = Path::new(CACHE_FILE);
-    if !cache_path.exists() {
-        return Err("缓存文件不存在".into());
+    let config = AppConfig::load();
+    
+    if let (Some(remote_sha), Some(timestamp)) = (config.remote_sha, config.remote_sha_timestamp) {
+        // 检查缓存是否过期
+        let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        if current_time - timestamp <= CACHE_DURATION.as_secs() {
+            return Ok(remote_sha);
+        }
     }
     
-    let mut file = File::open(cache_path)?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)?;
-    
-    let cache: Cache = serde_json::from_str(&content)?;
-    
-    // 检查缓存是否过期
-    let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    if current_time - cache.timestamp > CACHE_DURATION.as_secs() {
-        return Err("缓存已过期".into());
-    }
-    
-    Ok(cache.remote_sha)
+    Err("缓存不存在或已过期".into())
 }
 
-// 更新缓存
+// 更新配置中的远程 SHA 缓存
 pub fn update_cache(remote_sha: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cache = Cache {
-        remote_sha: remote_sha.to_string(),
-        timestamp: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-    };
-    
-    let content = serde_json::to_string(&cache)?;
-    
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(CACHE_FILE)?;
-    
-    file.write_all(content.as_bytes())?;
+    let mut config = AppConfig::load();
+    config.remote_sha = Some(remote_sha.to_string());
+    config.remote_sha_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
+    config.save();
     Ok(())
 }
 

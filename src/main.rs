@@ -200,6 +200,8 @@ impl SerialMonitor {
             window_height: self.window_height,
             check_for_updates: self.check_for_updates,
             last_update_check: Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()),
+            remote_sha: None,
+            remote_sha_timestamp: None,
         };
         
         config.save();

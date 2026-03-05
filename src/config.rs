@@ -42,6 +42,9 @@ pub struct AppConfig {
             // 更新检测设置
             pub check_for_updates: bool,
             pub last_update_check: Option<u64>,
+            // 更新缓存设置
+            pub remote_sha: Option<String>,
+            pub remote_sha_timestamp: Option<u64>,
         }
 
         // 为 AppConfig 实现 Default trait
@@ -76,6 +79,8 @@ pub struct AppConfig {
                     window_height: 600.0,
                     check_for_updates: true,
                     last_update_check: None,
+                    remote_sha: None,
+                    remote_sha_timestamp: None,
                 }
             }
         }
@@ -261,6 +266,21 @@ impl AppConfig {
                                         config.last_update_check = Some(v);
                                     }
                                 }
+                                "remote_sha" => {
+                                    if value == "None" || value == "null" {
+                                        config.remote_sha = None;
+                                    } else {
+                                        let value = value.trim_matches('"');
+                                        config.remote_sha = Some(value.to_string());
+                                    }
+                                }
+                                "remote_sha_timestamp" => {
+                                    if value == "None" || value == "null" {
+                                        config.remote_sha_timestamp = None;
+                                    } else if let Ok(v) = value.parse::<u64>() {
+                                        config.remote_sha_timestamp = Some(v);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
@@ -355,6 +375,20 @@ impl AppConfig {
 ", t));
             } else {
                 content.push_str("last_update_check = null
+");
+            }
+            if let Some(sha) = &self.remote_sha {
+                content.push_str(&format!("remote_sha = {:?}
+", sha));
+            } else {
+                content.push_str("remote_sha = null
+");
+            }
+            if let Some(ts) = self.remote_sha_timestamp {
+                content.push_str(&format!("remote_sha_timestamp = {}
+", ts));
+            } else {
+                content.push_str("remote_sha_timestamp = null
 ");
             }
             
