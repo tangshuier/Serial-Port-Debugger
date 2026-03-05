@@ -1,125 +1,109 @@
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use sha1::Digest;
-use crate::AppConfig;
+use std::time::Duration;
 
 // GitHub 仓库信息
 const REPO_OWNER: &str = "tangshuier";
 const REPO_NAME: &str = "Serial-Port-Debugger";
 const TARGET_FILE: &str = "target/release/串口调试器.exe";
+const UPDATE_BRANCH: &str = "release"; // 更新检测的分支
 const CACHE_DURATION: Duration = Duration::from_secs(3600); // 缓存有效期 1 小时
 
-
-
-// 计算文件的 SHA 哈希值
-pub fn calculate_file_sha(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let mut file = File::open(path)?;
-    let mut hasher = sha1::Sha1::new();
-    let mut buffer = [0; 8192];
-    
-    while let Ok(bytes_read) = file.read(&mut buffer) {
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    
-    let result = hasher.finalize();
-    let sha = bytes_to_hex(&result[..]);
-    Ok(sha)
+// 获取更新分支
+fn get_update_branch() -> String {
+    UPDATE_BRANCH.to_string()
 }
 
-// 计算远程文件的 SHA 哈希值
-pub fn calculate_remote_sha() -> Result<String, Box<dyn std::error::Error>> {
-    let download_url = format!(
-        "https://raw.githubusercontent.com/{}/{}/master/{}",
-        REPO_OWNER, REPO_NAME, TARGET_FILE
+// 获取远程版本号
+pub fn get_remote_version() -> Result<String, Box<dyn std::error::Error>> {
+    let branch = get_update_branch();
+    let cargo_toml_url = format!(
+        "https://raw.githubusercontent.com/{}/{}/{}/Cargo.toml",
+        REPO_OWNER, REPO_NAME, branch
     );
     
     let client = reqwest::blocking::Client::builder()
         .user_agent("Serial-Monitor/1.0")
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(30))
         .build()?;
     
-    let mut response = client.get(&download_url).send()?;
+    let response = client.get(&cargo_toml_url).send()?;
     
     if !response.status().is_success() {
         return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
     }
     
-    let mut hasher = sha1::Sha1::new();
-    let mut buffer = [0; 8192];
+    let content = response.text()?;
     
-    while let Ok(bytes_read) = response.read(&mut buffer) {
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    
-    let result = hasher.finalize();
-    let sha = bytes_to_hex(&result[..]);
-    Ok(sha)
-}
-
-// 从配置获取远程文件的 SHA
-pub fn get_cached_remote_sha() -> Result<String, Box<dyn std::error::Error>> {
-    let config = AppConfig::load();
-    
-    if let (Some(remote_sha), Some(timestamp)) = (config.remote_sha, config.remote_sha_timestamp) {
-        // 检查缓存是否过期
-        let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        if current_time - timestamp <= CACHE_DURATION.as_secs() {
-            return Ok(remote_sha);
+    // 解析Cargo.toml文件，提取version字段
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with("version = ") {
+            let version = line.split_once('=').unwrap().1.trim().trim_matches('"');
+            return Ok(version.to_string());
         }
     }
     
-    Err("缓存不存在或已过期".into())
+    Err("未找到版本号".into())
 }
 
-// 更新配置中的远程 SHA 缓存
-pub fn update_cache(remote_sha: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = AppConfig::load();
-    config.remote_sha = Some(remote_sha.to_string());
-    config.remote_sha_timestamp = Some(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs());
-    config.save();
-    Ok(())
+
+
+
+
+// 解析版本号为元组 (major, minor, patch)
+fn parse_version(version: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<&str> = version.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    
+    let major = parts[0].parse::<u32>().ok()?;
+    let minor = parts[1].parse::<u32>().ok()?;
+    let patch = parts[2].parse::<u32>().ok()?;
+    Some((major, minor, patch))
 }
 
-// 检查是否有更新
-pub fn check_for_updates() -> Result<bool, Box<dyn std::error::Error>> {
-    // 获取本地可执行文件的路径
-    let local_path = std::env::current_exe()?;
-    println!("本地可执行文件路径: {:?}", local_path);
-    
-    // 计算本地文件的 SHA
-    let local_sha = calculate_file_sha(&local_path)?;
-    println!("本地文件 SHA: {}", local_sha);
-    
-    // 尝试从缓存获取远程文件的 SHA
-    let remote_sha = match get_cached_remote_sha() {
-        Ok(cached_sha) => {
-            println!("使用缓存的远程文件 SHA: {}", cached_sha);
-            cached_sha
-        },
-        Err(_) => {
-            // 缓存无效或不存在，下载远程文件并计算其 SHA 值
-            println!("缓存无效或不存在，计算远程文件 SHA...");
-            let sha = calculate_remote_sha()?;
-            println!("远程文件内容 SHA: {}", sha);
-            // 更新缓存
-            if let Err(e) = update_cache(&sha) {
-                println!("更新缓存失败: {:?}", e);
-            }
-            sha
-        }
+// 比较版本号，返回 true 如果 remote_version 比 local_version 新
+fn is_version_newer(local_version: &str, remote_version: &str) -> bool {
+    let Some(local) = parse_version(local_version) else {
+        return false;
+    };
+    let Some(remote) = parse_version(remote_version) else {
+        return false;
     };
     
-    // 比较本地文件和远程文件的 SHA
-    let update_available = local_sha != remote_sha;
-    println!("是否有更新: {}", update_available);
+    remote > local
+}
+
+// 获取本地版本号
+pub fn get_local_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+// 获取仓库信息
+pub fn get_repo_info() -> (String, String) {
+    (REPO_OWNER.to_string(), REPO_NAME.to_string())
+}
+
+// 获取当前更新分支
+pub fn get_current_branch() -> String {
+    get_update_branch()
+}
+
+// 检查是否有更新（仅使用版本号）
+pub fn check_for_updates() -> Result<bool, Box<dyn std::error::Error>> {
+    // 获取本地版本号
+    let local_version = get_local_version();
+    println!("本地版本: {}", local_version);
+    
+    // 获取远程版本号
+    let remote_version = get_remote_version()?;
+    println!("远程版本: {}", remote_version);
+    
+    // 比较版本号
+    let update_available = is_version_newer(&local_version, &remote_version);
+    println!("版本号检查：是否有更新: {}", update_available);
     Ok(update_available)
 }
 
@@ -128,9 +112,10 @@ pub fn download_update_with_progress<F>(progress_callback: F) -> Result<(), Box<
 where
     F: Fn(f32) + Send + Sync + 'static,
 {
+    let branch = get_update_branch();
     let download_url = format!(
-        "https://raw.githubusercontent.com/{}/{}/master/{}",
-        REPO_OWNER, REPO_NAME, TARGET_FILE
+        "https://raw.githubusercontent.com/{}/{}/{}/{}",
+        REPO_OWNER, REPO_NAME, branch, TARGET_FILE
     );
     
     let client = reqwest::blocking::Client::builder()
@@ -197,7 +182,4 @@ pub fn download_update() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// 将字节数组转换为十六进制字符串
-fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
-}
+
