@@ -3341,7 +3341,7 @@ dependencies = [
 
 [[package]]
 name = "serial_monitor"
-version = "1.0.1"
+version = "1.2.5"
 dependencies = [
  "chrono",
  "directories",
