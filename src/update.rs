@@ -2,12 +2,16 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::time::Duration;
 
-// GitHub 仓库信息
+// 仓库信息
 const REPO_OWNER: &str = "tangshuier";
-const REPO_NAME: &str = "Serial-Port-Debugger";
+const REPO_NAME: &str = "serial-port-debugger";
 const TARGET_FILE: &str = "target/release/串口调试器.exe";
 const UPDATE_BRANCH: &str = "release"; // 更新检测的分支
 const CACHE_DURATION: Duration = Duration::from_secs(3600); // 缓存有效期 1 小时
+
+// Gitee API 端点
+const GITEE_RAW_URL: &str = "https://gitee.com/{owner}/{repo}/raw/{branch}/{file}";
+const GITEE_API_URL: &str = "https://gitee.com/api/v5/repos/{owner}/{repo}/branches";
 
 // 获取更新分支
 fn get_update_branch() -> String {
@@ -16,35 +20,34 @@ fn get_update_branch() -> String {
 
 // 获取远程版本号
 pub fn get_remote_version() -> Result<String, Box<dyn std::error::Error>> {
-    let branch = get_update_branch();
-    let cargo_toml_url = format!(
-        "https://raw.githubusercontent.com/{}/{}/{}/Cargo.toml",
-        REPO_OWNER, REPO_NAME, branch
-    );
+    // 获取所有标签
+    println!("开始获取远程版本号...");
+    let tags = get_all_versions()?;
     
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Serial-Monitor/1.0")
-        .timeout(Duration::from_secs(30))
-        .build()?;
+    println!("获取到的标签列表: {:?}", tags);
     
-    let response = client.get(&cargo_toml_url).send()?;
-    
-    if !response.status().is_success() {
-        return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
+    if tags.is_empty() {
+        println!("未找到标签");
+        return Err("未找到标签".into());
     }
     
-    let content = response.text()?;
+    // 找到最新的标签
+    let mut latest_tag = &tags[0];
+    println!("初始最新标签: {}", latest_tag);
     
-    // 解析Cargo.toml文件，提取version字段
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with("version = ") {
-            let version = line.split_once('=').unwrap().1.trim().trim_matches('"');
-            return Ok(version.to_string());
+    for tag in &tags {
+        println!("比较标签: {} 与 {}", latest_tag, tag);
+        println!("版本号: {} 与 {}", &latest_tag[19..], &tag[19..]);
+        if is_version_newer(&latest_tag[19..], &tag[19..]) {
+            println!("更新最新标签为: {}", tag);
+            latest_tag = tag;
         }
     }
     
-    Err("未找到版本号".into())
+    // 从标签名中提取版本号
+    let version = latest_tag.split('.').skip(1).collect::<Vec<&str>>().join(".");
+    println!("提取的版本号: {}", version);
+    Ok(version.to_string())
 }
 
 
@@ -91,38 +94,51 @@ pub fn get_current_branch() -> String {
     get_update_branch()
 }
 
-// 获取所有版本（分支）
+// 获取所有版本（标签）
 pub fn get_all_versions() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let api_url = format!(
-        "https://api.github.com/repos/{}/{}/branches",
+        "https://gitee.com/api/v5/repos/{}/{}/tags",
         REPO_OWNER, REPO_NAME
     );
+    
+    println!("获取标签的API URL: {}", api_url);
     
     let client = reqwest::blocking::Client::builder()
         .user_agent("Serial-Monitor/1.0")
         .timeout(Duration::from_secs(30))
         .build()?;
     
+    println!("发送API请求...");
     let response = client.get(&api_url).send()?;
     
+    println!("API响应状态码: {:?}", response.status());
+    
     if !response.status().is_success() {
+        println!("HTTP 请求失败: {:?}", response.status());
         return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
     }
     
-    let branches: serde_json::Value = response.json()?;
+    println!("解析API响应...");
+    let tags: serde_json::Value = response.json()?;
+    println!("API响应: {:?}", tags);
+    
     let mut versions = Vec::new();
     
-    if let Some(branch_array) = branches.as_array() {
-        for branch in branch_array {
-            if let Some(name) = branch["name"].as_str() {
-                // 只包含以Serial-Port-Debugger开头的分支
+    if let Some(tag_array) = tags.as_array() {
+        println!("标签数量: {}", tag_array.len());
+        for tag in tag_array {
+            if let Some(name) = tag["name"].as_str() {
+                println!("标签名称: {}", name);
+                // 只包含以Serial-Port-Debugger开头的标签
                 if name.starts_with("Serial-Port-Debugger") {
+                    println!("添加标签: {}", name);
                     versions.push(name.to_string());
                 }
             }
         }
     }
     
+    println!("最终标签列表: {:?}", versions);
     Ok(versions)
 }
 
@@ -147,11 +163,27 @@ pub fn download_update_with_progress<F>(progress_callback: F) -> Result<(), Box<
 where
     F: Fn(f32) + Send + Sync + 'static,
 {
-    let branch = get_update_branch();
-    let download_url = format!(
-        "https://raw.githubusercontent.com/{}/{}/{}/{}",
-        REPO_OWNER, REPO_NAME, branch, TARGET_FILE
-    );
+    // 获取所有标签
+    let tags = get_all_versions()?;
+    
+    if tags.is_empty() {
+        return Err("未找到标签".into());
+    }
+    
+    // 找到最新的标签
+    let mut latest_tag = &tags[0];
+    for tag in &tags {
+        if is_version_newer(&latest_tag[19..], &tag[19..]) {
+            latest_tag = tag;
+        }
+    }
+    
+    // 构建下载URL
+    let download_url = GITEE_RAW_URL
+        .replace("{owner}", REPO_OWNER)
+        .replace("{repo}", REPO_NAME)
+        .replace("{branch}", latest_tag)
+        .replace("{file}", TARGET_FILE);
     
     let client = reqwest::blocking::Client::builder()
         .user_agent("Serial-Monitor/1.0")
