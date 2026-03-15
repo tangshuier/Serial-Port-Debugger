@@ -720,7 +720,7 @@ fn main() {
     // 运行应用程序
     let config_clone = config.clone();
     eframe::run_native(
-        "串口调试助手 v0.0.2",
+        "串口调试助手 v0.0.3",
         native_options,
         Box::new(move |cc| {
             // 设置字体
