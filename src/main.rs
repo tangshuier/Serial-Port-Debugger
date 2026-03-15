@@ -7,16 +7,16 @@ static mut DOWNLOAD_PROGRESS: f32 = 0.0;
 static mut DOWNLOAD_COMPLETED: bool = false;
 static mut DOWNLOAD_RESULT: Option<Result<(), Box<dyn std::error::Error>>> = None;
 
-// 全局原子变量用于在后台线程和主线程之间传递更新状态
+// 全局原子变量用于在后台线程和主线程之间传递状态
 use std::sync::atomic::AtomicBool;
-static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
-static NO_UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 static VERSIONS_LOADED: AtomicBool = AtomicBool::new(false);
+static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
-// 全局变量用于存储版本列表
+// 全局变量用于存储版本列表和更新信息
 use std::sync::{Arc, Mutex};
 lazy_static::lazy_static! {
-    pub static ref VERSIONS: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref VERSIONS: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    pub static ref LATEST_VERSION: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
 }
 
 
@@ -55,8 +55,6 @@ struct SerialMonitor {
     pub window_y: Option<f32>,
     pub window_width: f32,
     pub window_height: f32,
-    // 窗口位置设置标志
-    pub has_set_window_position: bool,
     // 发送数据
     pub send_data: String,
     pub send_encoding: String,
@@ -80,27 +78,22 @@ struct SerialMonitor {
     pub new_shortcut: String,
     pub show_shortcut_window: bool,
     pub editing_shortcut_index: Option<usize>,
-    // 更新检测设置
-    pub show_update_window: bool,
-    pub update_available: bool,
-    pub ignore_update: bool,
-    pub check_for_updates: bool,
-    // 版本信息
-    pub remote_version: Option<String>,
-    // 更新分支
-    pub update_branch: String,
+
+
     // 下载进度
     pub show_download_window: bool,
     pub download_progress: f32,
     pub download_error: Option<String>,
     // 重启标志
     pub restart_needed: bool,
-    // 更新检查状态
-    pub is_checking_update: bool,
     // 版本列表窗口
     pub show_versions_window: bool,
-    pub versions: Vec<String>,
+    pub versions: Vec<(String, String)>, // (版本号, 描述)
     pub is_loading_versions: bool,
+    // 更新检查
+    pub update_available: bool,
+    pub latest_version: String,
+    pub show_update_info_window: bool,
 }
 
 impl SerialMonitor {
@@ -132,7 +125,6 @@ impl SerialMonitor {
             window_y: config.window_y,
             window_width: config.window_width,
             window_height: config.window_height,
-            has_set_window_position: false,
             send_data: String::new(),
             send_encoding: config.send_encoding.clone(),
             send_newline: config.send_newline,
@@ -148,27 +140,20 @@ impl SerialMonitor {
             new_shortcut: String::new(),
             show_shortcut_window: false,
             editing_shortcut_index: None,
-            // 更新检测设置
-            show_update_window: false,
-            update_available: false,
-            ignore_update: false,
-            check_for_updates: config.check_for_updates,
-            // 版本信息
-            remote_version: None,
-            // 更新分支
-            update_branch: config.update_branch.clone(),
             // 下载进度
             show_download_window: false,
             download_progress: 0.0,
             download_error: None,
             // 重启标志
             restart_needed: false,
-            // 更新检查状态
-            is_checking_update: false,
             // 版本列表窗口
             show_versions_window: false,
             versions: Vec::new(),
             is_loading_versions: false,
+            // 更新检查
+            update_available: false,
+            latest_version: "".to_string(),
+            show_update_info_window: false,
         }
     }
 }
@@ -231,9 +216,7 @@ impl SerialMonitor {
             window_y: self.window_y,
             window_width: self.window_width,
             window_height: self.window_height,
-            check_for_updates: self.check_for_updates,
-            last_update_check: Some(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()),
-            update_branch: self.update_branch.clone(),
+
         };
         
         config.save();
@@ -326,9 +309,34 @@ impl eframe::App for SerialMonitor {
             egui::Visuals::light()
         });
         
+        // 程序启动时检查一次更新
+        static mut HAS_CHECKED_UPDATE: bool = false;
+        let current_time = ctx.input(|i| i.time);
+        unsafe {
+            if !HAS_CHECKED_UPDATE && current_time >= 1.0 { // 延迟1秒检查，确保程序完全启动
+                HAS_CHECKED_UPDATE = true;
+                
+                // 在后台线程中检查更新
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    match crate::update::check_for_updates() {
+                        Ok((update_available, latest_version)) => {
+                            // 更新全局状态
+                            UPDATE_AVAILABLE.store(update_available, std::sync::atomic::Ordering::Relaxed);
+                            *crate::LATEST_VERSION.lock().unwrap() = latest_version;
+                            // 通知主线程
+                            ctx_clone.request_repaint();
+                        },
+                        Err(e) => {
+                            println!("检查更新失败: {:?}", e);
+                        }
+                    }
+                });
+            }
+        }
+        
         // 每500毫秒扫描一次串口，自动检测CH340设备
         static mut LAST_SCAN_TIME: f64 = 0.0;
-        let current_time = ctx.input(|i| i.time);
         unsafe {
             if current_time - LAST_SCAN_TIME >= 0.5 {
                 self.serial_manager.scan_ports();
@@ -351,88 +359,24 @@ impl eframe::App for SerialMonitor {
             }
         }
         
-        // 启动后在后台检查更新
-        static mut CHECKED_UPDATE: bool = false;
-        unsafe {
-            if !CHECKED_UPDATE && self.check_for_updates {
-                CHECKED_UPDATE = true;
-                // 在后台线程中检查更新
-                let ctx = ctx.clone();
-                std::thread::spawn(move || {
-                    match update::check_for_updates() {
-                        Ok(available) => {
-                            if available {
-                                // 检测到更新，在主线程中显示更新窗口
-                                ctx.request_repaint();
-                                // 使用全局标志或消息传递来通知主线程
-                                // 这里我们使用一个静态变量来传递状态
-                                // 注意：这不是线程安全的，实际应用中应该使用 Arc<Mutex>
-                                // 但为了简化，我们先使用这种方式
-                                // 在下一帧中，主线程会检查这个标志并显示更新窗口
-                                UPDATE_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        },
-                        Err(e) => {
-                            println!("检查更新失败: {:?}", e);
-                        }
-                    }
-                });
-            }
-            // 检查是否有更新可用
-            if UPDATE_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
-                UPDATE_AVAILABLE.store(false, std::sync::atomic::Ordering::Relaxed);
-                // 获取远程版本号
-                self.remote_version = update::get_remote_version().ok();
-                // 只更新状态，不自动弹出窗口
-                self.update_available = true;
-                // 重置检查状态
-                self.is_checking_update = false;
-            }
-            
-            // 检查是否无更新
-            if NO_UPDATE_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
-                NO_UPDATE_AVAILABLE.store(false, std::sync::atomic::Ordering::Relaxed);
-                // 显示无更新的提示，包含版本号、仓库信息和分支信息
-                let local_version = update::get_local_version();
-                let remote_version = update::get_remote_version().unwrap_or("未知".to_string());
-                let (repo_owner, repo_name) = update::get_repo_info();
-                let branch = update::get_current_branch();
-                self.error_message = format!("当前已是最新版本，无需更新\n本地版本: v{}\n远程版本: v{}\n远程仓库: {}/{}\n检测分支: {}", local_version, remote_version, repo_owner, repo_name, branch);
-                self.show_error_window = true;
-                // 重置检查状态
-                self.is_checking_update = false;
-            }
-            
-            // 检查更新完成后重置状态
-            // 这里添加一个简单的机制，当检查更新完成后重置is_checking_update标志
-            // 实际应用中可能需要更复杂的状态管理
-            if self.is_checking_update {
-                // 检查是否有更新检查线程在运行
-                // 为了简化，我们假设检查更新不会超过5秒
-                static mut LAST_CHECK_TIME: f64 = 0.0;
-                let current_time = ctx.input(|i| i.time);
-                if LAST_CHECK_TIME == 0.0 {
-                    LAST_CHECK_TIME = current_time;
-                } else if current_time - LAST_CHECK_TIME > 5.0 {
-                    // 超过5秒，认为检查已完成
-                    self.is_checking_update = false;
-                    LAST_CHECK_TIME = 0.0;
-                }
-            }
-            
-            // 检查更新完成后重置状态
-            // 这里可以添加一个超时机制，避免长时间显示检查中状态
-            // 暂时简单处理，每次更新循环都重置
-            // 实际应用中应该根据具体情况处理
-            // self.is_checking_update = false;
-            
-            // 检查版本列表是否加载完成
-            if VERSIONS_LOADED.load(std::sync::atomic::Ordering::Relaxed) {
-                VERSIONS_LOADED.store(false, std::sync::atomic::Ordering::Relaxed);
-                // 获取版本列表
-                self.versions = VERSIONS.lock().unwrap().clone();
-                // 重置加载状态
-                self.is_loading_versions = false;
+        // 检查版本列表是否加载完成
+        if VERSIONS_LOADED.load(std::sync::atomic::Ordering::Relaxed) {
+            VERSIONS_LOADED.store(false, std::sync::atomic::Ordering::Relaxed);
+            // 获取版本列表
+            self.versions = VERSIONS.lock().unwrap().clone();
+            // 重置加载状态
+            self.is_loading_versions = false;
+        }
+        
+        // 检查更新状态
+        if UPDATE_AVAILABLE.load(std::sync::atomic::Ordering::Relaxed) {
+            self.update_available = true;
+            self.latest_version = LATEST_VERSION.lock().unwrap().clone();
+        } else {
+            // 即使没有更新，也获取最新版本信息
+            let latest_version = LATEST_VERSION.lock().unwrap().clone();
+            if !latest_version.is_empty() {
+                self.latest_version = latest_version;
             }
         }
         
@@ -453,6 +397,65 @@ impl eframe::App for SerialMonitor {
         // 渲染快捷指令编辑窗口
         ui::render_shortcut_window(ctx, self);
         
+        // 渲染更新信息窗口
+        if self.show_update_info_window {
+            egui::Window::new("更新信息")
+                .resizable(false)
+                .default_size([300.0, 200.0])
+                .show(ctx, |ui| {
+                    ui.heading("版本信息");
+                    
+                    // 显示当前版本
+                    let current_version = update::get_local_version();
+                    ui.label(format!("当前版本: {}", current_version));
+                    
+                    // 显示最新版本
+                    let latest_version = self.latest_version.clone();
+                    if self.update_available {
+                        ui.label(egui::RichText::new(format!("最新版本: {}", latest_version)).color(egui::Color32::GREEN));
+                        ui.label("有新版本可用！");
+                    } else {
+                        ui.label(format!("最新版本: {}", latest_version));
+                        ui.label("当前已是最新版本");
+                    }
+                    
+                    ui.add_space(20.0);
+                    
+                    // 按钮区域
+                    ui.horizontal(|ui| {
+                        // 查看更多版本按钮
+                        if ui.button("查看更多版本").clicked() {
+                            // 显示版本列表窗口
+                            self.show_versions_window = true;
+                            self.is_loading_versions = true;
+                            
+                            // 在后台线程中获取所有版本
+                            let ctx_clone = ctx.clone();
+                            std::thread::spawn(move || {
+                                match crate::update::get_all_versions() {
+                                    Ok(versions) => {
+                                        // 更新版本列表
+                                        *crate::VERSIONS.lock().unwrap() = versions;
+                                        // 通知主线程
+                                        ctx_clone.request_repaint();
+                                        crate::VERSIONS_LOADED.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    },
+                                    Err(e) => {
+                                        println!("获取版本列表失败: {:?}", e);
+                                    }
+                                }
+                            });
+                            self.show_update_info_window = false;
+                        }
+                        
+                        // 关闭按钮
+                        if ui.button("关闭").clicked() {
+                            self.show_update_info_window = false;
+                        }
+                    });
+                });
+        }
+        
         // 渲染版本列表窗口
         if self.show_versions_window {
             egui::Window::new("所有版本")
@@ -470,8 +473,47 @@ impl eframe::App for SerialMonitor {
                             .max_height(120.0) // 限制滚动区域高度，大约显示5个版本
                             .auto_shrink([false; 2])
                             .show(ui, |ui| {
-                                for version in &self.versions {
-                                    ui.label(version);
+                                for (version, description) in &self.versions {
+                                    let button = ui.button(version);
+                                    if button.clicked() {
+                                        // 显示下载进度窗口
+                                        self.show_download_window = true;
+                                        self.download_progress = 0.0;
+                                        self.download_error = None;
+                                        self.show_versions_window = false;
+                                        
+                                        // 重置全局下载状态
+                                        unsafe {
+                                            DOWNLOAD_PROGRESS = 0.0;
+                                            DOWNLOAD_COMPLETED = false;
+                                            DOWNLOAD_RESULT = None;
+                                        }
+                                        
+                                        // 在后台线程中下载指定版本
+                                        let ctx_for_closure = ctx.clone();
+                                        let ctx_for_completion = ctx.clone();
+                                        let version_clone = version.clone();
+                                        std::thread::spawn(move || {
+                                            let result = update::download_specific_version_with_progress(&version_clone, move |progress| {
+                                                // 在主线程中更新进度
+                                                ctx_for_closure.request_repaint();
+                                                unsafe {
+                                                    DOWNLOAD_PROGRESS = progress;
+                                                }
+                                            });
+                                            
+                                            // 下载完成后更新状态
+                                            ctx_for_completion.request_repaint();
+                                            unsafe {
+                                                DOWNLOAD_COMPLETED = true;
+                                                DOWNLOAD_RESULT = Some(result);
+                                            }
+                                        });
+                                    }
+                                    // 添加悬停提示
+                                    if !description.is_empty() {
+                                        button.on_hover_text(description);
+                                    }
                                 }
                             });
                     }
@@ -483,99 +525,7 @@ impl eframe::App for SerialMonitor {
                 });
         }
         
-        // 渲染更新提示窗口
-        if self.show_update_window {
-            egui::Window::new("软件更新")
-                .resizable(false)
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ui.label(format!("检测到新版本 v{}，是否更新？", self.remote_version.as_deref().unwrap_or("未知")));
-                    
-                    ui.separator();
-                    
-                    let mut ignore_update = self.ignore_update;
-                    ui.checkbox(&mut ignore_update, "不再提醒");
-                    self.ignore_update = ignore_update;
-                    
-                    ui.separator();
-                    
-                    ui.horizontal(|ui| {
-                        if ui.button("更新").clicked() {
-                            // 显示下载进度窗口
-                            self.show_download_window = true;
-                            self.download_progress = 0.0;
-                            self.download_error = None;
-                            self.show_update_window = false;
-                            
-                            // 重置全局下载状态
-                            unsafe {
-                                DOWNLOAD_PROGRESS = 0.0;
-                                DOWNLOAD_COMPLETED = false;
-                                DOWNLOAD_RESULT = None;
-                            }
-                            
-                            // 在后台线程中下载更新
-                            let ctx_for_closure = ctx.clone();
-                            let ctx_for_completion = ctx.clone();
-                            std::thread::spawn(move || {
-                                let result = update::download_update_with_progress(move |progress| {
-                                    // 在主线程中更新进度
-                                    ctx_for_closure.request_repaint();
-                                    // 这里需要使用 Arc<Mutex> 来安全地更新进度
-                                    // 为了简化，我们先使用一个全局变量
-                                    // 注意：这不是线程安全的，实际应用中应该使用 Arc<Mutex>
-                                    unsafe {
-                                        DOWNLOAD_PROGRESS = progress;
-                                    }
-                                });
-                                
-                                // 下载完成后更新状态
-                                ctx_for_completion.request_repaint();
-                                unsafe {
-                                    DOWNLOAD_COMPLETED = true;
-                                    DOWNLOAD_RESULT = Some(result);
-                                }
-                            });
-                        }
-                        
-                        if ui.button("检查更新").clicked() {
-                            // 手动检查更新
-                            self.is_checking_update = true;
-                            self.show_update_window = false;
-                            
-                            // 在后台线程中检查更新
-                            let ctx = ctx.clone();
-                            std::thread::spawn(move || {
-                                match update::check_for_updates() {
-                                    Ok(available) => {
-                                        if available {
-                                            // 检测到更新，在主线程中显示更新窗口
-                                            ctx.request_repaint();
-                                            UPDATE_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                                        } else {
-                                            // 没有更新，显示提示
-                                            ctx.request_repaint();
-                                            // 这里可以添加一个提示，告诉用户当前已是最新版本
-                                        }
-                                    },
-                                    Err(e) => {
-                                        println!("检查更新失败: {:?}", e);
-                                    }
-                                }
-                            });
-                        }
-                        
-                        if ui.button("忽略").clicked() {
-                            // 如果用户选择不再提醒，禁用更新检测
-                            if self.ignore_update {
-                                self.check_for_updates = false;
-                                self.save_config();
-                            }
-                            self.show_update_window = false;
-                        }
-                    });
-                });
-        }
+
         
         // 渲染下载进度窗口
         if self.show_download_window {
@@ -583,11 +533,10 @@ impl eframe::App for SerialMonitor {
             unsafe {
                 self.download_progress = DOWNLOAD_PROGRESS;
                 if DOWNLOAD_COMPLETED {
-                    // 使用 &raw const 来创建原始指针并读取静态变量
-                    let result = std::ptr::read(&raw const DOWNLOAD_RESULT);
+                    // 安全地获取下载结果
+                    let result = std::mem::replace(&mut *(&raw mut DOWNLOAD_RESULT), None);
                     // 重置下载状态
                     DOWNLOAD_COMPLETED = false;
-                    DOWNLOAD_RESULT = None;
                     
                     match result {
                         Some(Ok(_)) => {
@@ -625,7 +574,7 @@ impl eframe::App for SerialMonitor {
             if let Ok(exe_path) = std::env::current_exe() {
                 // 创建批处理文件来删除旧版本并启动新版本
                 let batch_path = exe_path.with_extension("bat");
-                let old_exe_path = exe_path.with_extension("old.exe");
+                let _old_exe_path = exe_path.with_extension("old.exe");
                 
                 // 构建批处理文件内容（使用ASCII字符，避免编码问题）
                 let batch_content = format!(r#"
@@ -739,13 +688,14 @@ fn main() {
     // 运行应用程序
     let config_clone = config.clone();
     eframe::run_native(
-        "串口调试助手 v1.2.5",
+        "串口调试助手 v0.0.1",
         native_options,
         Box::new(move |cc| {
             // 设置字体
             cc.egui_ctx.set_fonts(fonts);
             // 使用加载的配置创建实例
-            Box::new(SerialMonitor::from_config(&config_clone))
+            let app = SerialMonitor::from_config(&config_clone);
+            Box::new(app)
         }),
     ).expect("Failed to run application");
 }

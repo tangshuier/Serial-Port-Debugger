@@ -6,55 +6,120 @@ use std::time::Duration;
 const REPO_OWNER: &str = "tangshuier";
 const REPO_NAME: &str = "serial-port-debugger";
 const TARGET_FILE: &str = "target/release/串口调试器.exe";
-const UPDATE_BRANCH: &str = "release"; // 更新检测的分支
-const CACHE_DURATION: Duration = Duration::from_secs(3600); // 缓存有效期 1 小时
 
 // Gitee API 端点
 const GITEE_RAW_URL: &str = "https://gitee.com/{owner}/{repo}/raw/{branch}/{file}";
-const GITEE_API_URL: &str = "https://gitee.com/api/v5/repos/{owner}/{repo}/branches";
+const GITEE_RELEASES_URL: &str = "https://gitee.com/api/v5/repos/{owner}/{repo}/releases";
 
-// 获取更新分支
-fn get_update_branch() -> String {
-    UPDATE_BRANCH.to_string()
-}
-
-// 获取远程版本号
-pub fn get_remote_version() -> Result<String, Box<dyn std::error::Error>> {
-    // 获取所有标签
-    println!("开始获取远程版本号...");
-    let tags = get_all_versions()?;
+/// 获取所有版本（标签）
+/// 
+/// 从Gitee仓库获取所有符合语义化版本规范的标签
+/// 只包含以v开头的标准版本号标签，格式为vX.Y.Z
+pub fn get_all_versions() -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+    let api_url = format!(
+        "https://gitee.com/api/v5/repos/{}/{}/tags",
+        REPO_OWNER, REPO_NAME
+    );
     
-    println!("获取到的标签列表: {:?}", tags);
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Serial-Monitor/1.0")
+        .timeout(Duration::from_secs(30))
+        .build()?;
     
-    if tags.is_empty() {
-        println!("未找到标签");
-        return Err("未找到标签".into());
+    let response = client.get(&api_url).send()?;
+    
+    if !response.status().is_success() {
+        return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
     }
     
-    // 找到最新的标签
-    let mut latest_tag = &tags[0];
-    println!("初始最新标签: {}", latest_tag);
+    let tags: serde_json::Value = response.json()?;
+    let mut versions = Vec::new();
     
-    for tag in &tags {
-        println!("比较标签: {} 与 {}", latest_tag, tag);
-        println!("版本号: {} 与 {}", &latest_tag[19..], &tag[19..]);
-        if is_version_newer(&latest_tag[19..], &tag[19..]) {
-            println!("更新最新标签为: {}", tag);
-            latest_tag = tag;
+    if let Some(tag_array) = tags.as_array() {
+        for tag in tag_array {
+            if let Some(name) = tag["name"].as_str() {
+                // 只包含以v开头的标准版本号标签，遵循语义化版本规定：v主版本号.次版本号.修订号
+                if name.starts_with("v") {
+                    // 验证版本号格式：vX.Y.Z
+                    let version_part = &name[1..];
+                    let parts: Vec<&str> = version_part.split('.').collect();
+                    if parts.len() == 3 {
+                        // 验证每个部分都是数字
+                        let is_valid = parts.iter().all(|part| part.chars().all(|c| c.is_digit(10)));
+                        if is_valid {
+                            // 获取标签描述
+                            let description = tag["message"].as_str().unwrap_or("").to_string();
+                            versions.push((name.to_string(), description));
+                        }
+                    }
+                }
+            }
         }
     }
     
-    // 从标签名中提取版本号
-    let version = latest_tag.split('.').skip(1).collect::<Vec<&str>>().join(".");
-    println!("提取的版本号: {}", version);
-    Ok(version.to_string())
+    Ok(versions)
 }
 
+/// 获取指定标签的发布信息
+fn get_release_by_tag(tag: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let releases_url = GITEE_RELEASES_URL
+        .replace("{owner}", REPO_OWNER)
+        .replace("{repo}", REPO_NAME);
+    
+    // 创建带有认证的客户端
+    let mut headers = reqwest::header::HeaderMap::new();
+    // 添加Gitee个人访问令牌认证
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str("token 328fcabd60277c9477b2320e3a9873f6").unwrap()
+    );
+    
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Serial-Monitor/1.0")
+        .timeout(Duration::from_secs(30))
+        .default_headers(headers)
+        .build()?;
+    
+    let response = client.get(&releases_url).send()?;
+    
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().unwrap_or_else(|_| "无法获取错误内容".to_string());
+        return Err(format!("获取发布信息失败: {:?}, 响应: {}", status, error_body).into());
+    }
+    
+    let releases: serde_json::Value = response.json()?;
+    
+    // 查找对应标签的发布
+    if let Some(release_array) = releases.as_array() {
+        for release in release_array {
+            if let Some(release_tag) = release["tag_name"].as_str() {
+                // 支持多种标签格式：
+                // 1. 完整格式: Serial-Port-Debugger.1.2.6
+                // 2. 简单格式: v1.2.6 或 1.2.6
+                // 3. 其他格式: 如用户创建的 v0.0.1
+                
+                // 提取版本号部分进行比较
+                let tag_version = tag.split('.').skip(1).collect::<Vec<&str>>().join(".");
+                let release_version = if release_tag.starts_with("v") {
+                    release_tag[1..].to_string()
+                } else if release_tag.starts_with("Serial-Port-Debugger.") {
+                    release_tag.split('.').skip(1).collect::<Vec<&str>>().join(".")
+                } else {
+                    release_tag.to_string()
+                };
+                
+                if release_tag == tag || tag_version == release_version {
+                    return Ok(release.clone());
+                }
+            }
+        }
+    }
+    
+    Err("未找到对应标签的发布".into())
+}
 
-
-
-
-// 解析版本号为元组 (major, minor, patch)
+/// 解析版本号为元组 (major, minor, patch)
 fn parse_version(version: &str) -> Option<(u32, u32, u32)> {
     let parts: Vec<&str> = version.split('.').collect();
     if parts.len() != 3 {
@@ -67,7 +132,7 @@ fn parse_version(version: &str) -> Option<(u32, u32, u32)> {
     Some((major, minor, patch))
 }
 
-// 比较版本号，返回 true 如果 remote_version 比 local_version 新
+/// 比较版本号，返回 true 如果 remote_version 比 local_version 新
 fn is_version_newer(local_version: &str, remote_version: &str) -> bool {
     let Some(local) = parse_version(local_version) else {
         return false;
@@ -79,121 +144,168 @@ fn is_version_newer(local_version: &str, remote_version: &str) -> bool {
     remote > local
 }
 
-// 获取本地版本号
+/// 获取本地版本号
 pub fn get_local_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-// 获取仓库信息
-pub fn get_repo_info() -> (String, String) {
-    (REPO_OWNER.to_string(), REPO_NAME.to_string())
-}
-
-// 获取当前更新分支
-pub fn get_current_branch() -> String {
-    get_update_branch()
-}
-
-// 获取所有版本（标签）
-pub fn get_all_versions() -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let api_url = format!(
-        "https://gitee.com/api/v5/repos/{}/{}/tags",
-        REPO_OWNER, REPO_NAME
-    );
+/// 检查是否有更新
+/// 
+/// 比较本地版本与远程最新版本
+pub fn check_for_updates() -> Result<(bool, String), Box<dyn std::error::Error>> {
+    // 获取本地版本号
+    let local_version = get_local_version();
     
-    println!("获取标签的API URL: {}", api_url);
+    // 获取所有版本
+    let versions = get_all_versions()?;
     
-    let client = reqwest::blocking::Client::builder()
-        .user_agent("Serial-Monitor/1.0")
-        .timeout(Duration::from_secs(30))
-        .build()?;
-    
-    println!("发送API请求...");
-    let response = client.get(&api_url).send()?;
-    
-    println!("API响应状态码: {:?}", response.status());
-    
-    if !response.status().is_success() {
-        println!("HTTP 请求失败: {:?}", response.status());
-        return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
+    if versions.is_empty() {
+        return Ok((false, "".to_string()));
     }
     
-    println!("解析API响应...");
-    let tags: serde_json::Value = response.json()?;
-    println!("API响应: {:?}", tags);
+    // 找到最新的版本
+    let mut latest_version = "";
+    let mut latest_version_full = "";
     
-    let mut versions = Vec::new();
-    
-    if let Some(tag_array) = tags.as_array() {
-        println!("标签数量: {}", tag_array.len());
-        for tag in tag_array {
-            if let Some(name) = tag["name"].as_str() {
-                println!("标签名称: {}", name);
-                // 只包含以Serial-Port-Debugger开头的标签
-                if name.starts_with("Serial-Port-Debugger") {
-                    println!("添加标签: {}", name);
-                    versions.push(name.to_string());
-                }
+    for (version_full, _) in &versions {
+        // 提取版本号部分（去掉v前缀）
+        if version_full.starts_with("v") {
+            let version = &version_full[1..];
+            if latest_version.is_empty() || is_version_newer(latest_version, version) {
+                latest_version = version;
+                latest_version_full = version_full;
             }
         }
     }
     
-    println!("最终标签列表: {:?}", versions);
-    Ok(versions)
-}
-
-// 检查是否有更新（仅使用版本号）
-pub fn check_for_updates() -> Result<bool, Box<dyn std::error::Error>> {
-    // 获取本地版本号
-    let local_version = get_local_version();
-    println!("本地版本: {}", local_version);
-    
-    // 获取远程版本号
-    let remote_version = get_remote_version()?;
-    println!("远程版本: {}", remote_version);
+    if latest_version.is_empty() {
+        return Ok((false, "".to_string()));
+    }
     
     // 比较版本号
-    let update_available = is_version_newer(&local_version, &remote_version);
-    println!("版本号检查：是否有更新: {}", update_available);
-    Ok(update_available)
+    let update_available = is_version_newer(&local_version, latest_version);
+    Ok((update_available, latest_version_full.to_string()))
 }
 
-// 下载更新（带进度回调）
-pub fn download_update_with_progress<F>(progress_callback: F) -> Result<(), Box<dyn std::error::Error>> 
+/// 下载指定版本的更新（带进度回调）
+/// 
+/// 尝试从Gitee Releases API下载，失败则使用原始方法
+/// 支持大文件下载，包含文件备份和错误处理
+pub fn download_specific_version_with_progress<F>(version: &str, progress_callback: F) -> Result<(), Box<dyn std::error::Error>> 
 where
     F: Fn(f32) + Send + Sync + 'static,
 {
-    // 获取所有标签
-    let tags = get_all_versions()?;
-    
-    if tags.is_empty() {
-        return Err("未找到标签".into());
-    }
-    
-    // 找到最新的标签
-    let mut latest_tag = &tags[0];
-    for tag in &tags {
-        if is_version_newer(&latest_tag[19..], &tag[19..]) {
-            latest_tag = tag;
+    // 尝试通过Releases API下载
+    match get_release_by_tag(version) {
+        Ok(release) => {
+            // 查找资产文件
+            if let Some(assets) = release["assets"].as_array() {
+                for asset in assets {
+                    if let Some(name) = asset["name"].as_str() {
+                        if name == "串口调试器.exe" {
+                            if let Some(browser_download_url) = asset["browser_download_url"].as_str() {
+                                // 创建带有认证的客户端
+                                let mut headers = reqwest::header::HeaderMap::new();
+                                // 添加Gitee个人访问令牌认证
+                                headers.insert(
+                                    reqwest::header::AUTHORIZATION,
+                                    reqwest::header::HeaderValue::from_str("token 328fcabd60277c9477b2320e3a9873f6").unwrap()
+                                );
+                                
+                                let client = reqwest::blocking::Client::builder()
+                                    .user_agent("Serial-Monitor/1.0")
+                                    .timeout(Duration::from_secs(120))
+                                    .default_headers(headers)
+                                    .build()?;
+                                
+                                let response = client.get(browser_download_url).send()?;
+                                
+                                let status = response.status();
+                                if !status.is_success() {
+                                    // 继续尝试原始方法
+                                } else {
+                                    // 下载成功，处理文件
+                                    let total_size = response.content_length().unwrap_or(0);
+                                    
+                                    let local_path = std::env::current_exe()?;
+                                    let backup_path = local_path.with_extension(format!("old_{}.exe", chrono::Local::now().format("%Y%m%d%H%M%S")));
+                                    
+                                    if local_path.exists() {
+                                        std::fs::rename(&local_path, &backup_path)?;
+                                    }
+                                    
+                                    let mut dest_file = File::create(&local_path)?;
+                                    let mut content = response;
+                                    let mut downloaded = 0;
+                                    let mut buffer = [0; 8192];
+                                    
+                                    while let Ok(bytes_read) = content.read(&mut buffer) {
+                                        if bytes_read == 0 {
+                                            break;
+                                        }
+                                        dest_file.write_all(&buffer[..bytes_read])?;
+                                        downloaded += bytes_read;
+                                        
+                                        if total_size > 0 {
+                                            let progress = downloaded as f32 / total_size as f32;
+                                            progress_callback(progress);
+                                        }
+                                    }
+                                    
+                                    // 删除旧版备份文件
+                                    if backup_path.exists() {
+                                        if let Err(e) = std::fs::remove_file(&backup_path) {
+                                            println!("删除旧版备份文件失败: {:?}", e);
+                                        }
+                                    }
+                                    
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            // 继续尝试原始方法
         }
     }
     
-    // 构建下载URL
+    // 原始下载方法（备用）
     let download_url = GITEE_RAW_URL
         .replace("{owner}", REPO_OWNER)
         .replace("{repo}", REPO_NAME)
-        .replace("{branch}", latest_tag)
+        .replace("{branch}", version)
         .replace("{file}", TARGET_FILE);
+    
+    // 创建带有认证的客户端
+    let mut headers = reqwest::header::HeaderMap::new();
+    // 添加Gitee个人访问令牌认证
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        reqwest::header::HeaderValue::from_str("token 328fcabd60277c9477b2320e3a9873f6").unwrap()
+    );
     
     let client = reqwest::blocking::Client::builder()
         .user_agent("Serial-Monitor/1.0")
         .timeout(Duration::from_secs(120))
+        .default_headers(headers)
         .build()?;
     
     let response = client.get(&download_url).send()?;
     
-    if !response.status().is_success() {
-        return Err(format!("HTTP 请求失败: {:?}", response.status()).into());
+    let status = response.status();
+    if !status.is_success() {
+        // 获取错误响应内容
+        let error_body = response.text().unwrap_or_else(|_| "无法获取错误内容".to_string());
+        
+        // 处理大文件需要登录的情况
+        if error_body.contains("large file require login") {
+            return Err("大文件下载需要登录，请手动从Gitee仓库下载对应版本的文件".into());
+        }
+        
+        return Err(format!("HTTP 请求失败: {:?}, 响应: {}", status, error_body).into());
     }
     
     // 获取文件大小
@@ -206,7 +318,6 @@ where
     // 备份旧文件
     if local_path.exists() {
         std::fs::rename(&local_path, &backup_path)?;
-        println!("已备份旧文件到: {:?}", backup_path);
     }
     
     // 下载新文件
@@ -229,24 +340,12 @@ where
         }
     }
     
-    println!("文件下载成功，大小: {} 字节", downloaded);
-    
     // 删除旧版备份文件
     if backup_path.exists() {
         if let Err(e) = std::fs::remove_file(&backup_path) {
             println!("删除旧版备份文件失败: {:?}", e);
-        } else {
-            println!("已删除旧版备份文件: {:?}", backup_path);
         }
     }
     
     Ok(())
 }
-
-// 下载更新（兼容旧接口）
-pub fn download_update() -> Result<(), Box<dyn std::error::Error>> {
-    download_update_with_progress(|_| {})?;
-    Ok(())
-}
-
-

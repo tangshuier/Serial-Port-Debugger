@@ -39,12 +39,7 @@ pub struct AppConfig {
             pub window_y: Option<f32>,
             pub window_width: f32,
             pub window_height: f32,
-            // 更新检测设置
-            pub check_for_updates: bool,
-            pub last_update_check: Option<u64>,
 
-            // 更新源配置
-            pub update_branch: String,
         }
 
         // 为 AppConfig 实现 Default trait
@@ -77,9 +72,6 @@ pub struct AppConfig {
                     window_y: None,
                     window_width: 800.0,
                     window_height: 600.0,
-                    check_for_updates: true,
-                    last_update_check: None,
-                    update_branch: "release".to_string(),
                 }
             }
         }
@@ -253,23 +245,7 @@ impl AppConfig {
                                         config.window_height = v;
                                     }
                                 }
-                                "check_for_updates" => {
-                                    if let Ok(v) = value.parse::<bool>() {
-                                        config.check_for_updates = v;
-                                    }
-                                }
-                                "last_update_check" => {
-                                    if value == "None" || value == "null" {
-                                        config.last_update_check = None;
-                                    } else if let Ok(v) = value.parse::<u64>() {
-                                        config.last_update_check = Some(v);
-                                    }
-                                }
 
-                                "update_branch" => {
-                                    let value = value.trim_matches('"');
-                                    config.update_branch = value.to_string();
-                                }
                                 _ => {}
                             }
                         }
@@ -357,18 +333,6 @@ impl AppConfig {
 ", self.window_width));
             content.push_str(&format!("window_height = {}
 ", self.window_height));
-            content.push_str(&format!("check_for_updates = {}
-", self.check_for_updates));
-            if let Some(t) = self.last_update_check {
-                content.push_str(&format!("last_update_check = {}
-", t));
-            } else {
-                content.push_str("last_update_check = null
-");
-            }
-
-            content.push_str(&format!("update_branch = {:?}
-", self.update_branch));
             
             println!("Config content to save: {}", content);
             

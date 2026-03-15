@@ -2,7 +2,6 @@ use eframe::egui;
 use encoding_rs;
 use serialport;
 use crate::DisplayMode;
-use crate::update;
 
 // UI相关功能
 pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
@@ -15,54 +14,16 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
     ui.horizontal(|ui| {
         ui.heading("串口调试助手");
         
-        // 更新图标按钮
+        // 更新图标按钮 - 根据是否有更新显示不同颜色
         let update_icon = if app.update_available {
-            // 有更新时显示绿色图标
             egui::Button::new(egui::RichText::new("🔄").color(egui::Color32::GREEN))
         } else {
-            // 无更新时显示灰色图标
             egui::Button::new(egui::RichText::new("🔄").color(egui::Color32::GRAY))
         };
         
         if ui.add(update_icon).clicked() {
-            if app.update_available {
-                // 有更新时显示更新窗口
-                app.show_update_window = true;
-            } else {
-                // 无更新时检查更新
-                if !app.is_checking_update {
-                    app.is_checking_update = true;
-                    // 在后台线程中检查更新
-                    let ctx = ui.ctx().clone();
-                    std::thread::spawn(move || {
-                        match update::check_for_updates() {
-                            Ok(available) => {
-                                if available {
-                                    // 检测到更新，在主线程中显示更新窗口
-                                    ctx.request_repaint();
-                                    // 使用全局原子变量通知主线程
-                                    crate::UPDATE_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                                } else {
-                                    // 无更新，显示提示
-                                    ctx.request_repaint();
-                                    // 显示无更新的提示
-                                    // 使用全局原子变量通知主线程
-                                    crate::NO_UPDATE_AVAILABLE.store(true, std::sync::atomic::Ordering::Relaxed);
-                                }
-                            },
-                            Err(e) => {
-                                println!("检查更新失败: {:?}", e);
-                            }
-                        }
-                        // 检查完成 - 注意：这里不能直接修改app，需要通过其他方式
-                        // 我们在主线程中处理is_checking_update的重置
-                    });
-                } else {
-                    // 正在检查更新，显示提示
-                    app.error_message = "正在检查更新，请稍候...".to_string();
-                    app.show_error_window = true;
-                }
-            }
+            // 显示更新信息窗口
+            app.show_update_info_window = true;
         }
         
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {

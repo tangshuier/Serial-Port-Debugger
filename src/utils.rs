@@ -260,20 +260,4 @@ pub fn try_decode(bytes: &[u8], receive_encoding: &str) -> String {
     }
 }
 
-// 根据显示模式格式化数据
-pub fn format_data_for_display(data: &[u8], display_mode: DisplayMode) -> String {
-    match display_mode {
-        DisplayMode::UTF8 => {
-            // 使用 UTF-8 解析
-            String::from_utf8_lossy(data).to_string()
-        }
-        DisplayMode::Hex => {
-            let hex_str = data.iter().map(|b| format!("{:02X} ", b)).collect::<String>();
-            format!("{}\n", hex_str)
-        }
-        DisplayMode::Binary => {
-            let bin_str = data.iter().map(|b| format!("{:08b} ", b)).collect::<String>();
-            format!("{}\n", bin_str)
-        }
-    }
-}
+
