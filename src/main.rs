@@ -2,11 +2,6 @@
 use eframe::egui;
 use std::io::Write;
 
-// 全局变量用于在后台线程和主线程之间传递下载状态
-static mut DOWNLOAD_PROGRESS: f32 = 0.0;
-static mut DOWNLOAD_COMPLETED: bool = false;
-static mut DOWNLOAD_RESULT: Option<Result<(), Box<dyn std::error::Error>>> = None;
-
 // 全局原子变量用于在后台线程和主线程之间传递状态
 use std::sync::atomic::AtomicBool;
 static VERSIONS_LOADED: AtomicBool = AtomicBool::new(false);
@@ -14,9 +9,30 @@ static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 // 全局变量用于存储版本列表和更新信息
 use std::sync::{Arc, Mutex};
+
+// 定义下载状态结构体
+struct DownloadState {
+    progress: f32,
+    completed: bool,
+    success: bool,
+    error: Option<String>,
+}
+
+impl DownloadState {
+    fn new() -> Self {
+        Self {
+            progress: 0.0,
+            completed: false,
+            success: false,
+            error: None,
+        }
+    }
+}
+
 lazy_static::lazy_static! {
     pub static ref VERSIONS: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
     pub static ref LATEST_VERSION: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    static ref DOWNLOAD_STATE: Arc<Mutex<DownloadState>> = Arc::new(Mutex::new(DownloadState::new()));
 }
 
 
@@ -95,6 +111,10 @@ struct SerialMonitor {
     pub update_available: bool,
     pub latest_version: String,
     pub show_update_info_window: bool,
+    // 定时器状态
+    pub last_scan_time: f64,
+    pub last_heartbeat_time: f64,
+    pub has_checked_update: bool,
 }
 
 impl SerialMonitor {
@@ -156,6 +176,10 @@ impl SerialMonitor {
             update_available: false,
             latest_version: "".to_string(),
             show_update_info_window: false,
+            // 定时器状态
+            last_scan_time: 0.0,
+            last_heartbeat_time: 0.0,
+            has_checked_update: false,
         }
     }
 }
@@ -311,54 +335,46 @@ impl eframe::App for SerialMonitor {
             egui::Visuals::light()
         });
         
-        // 程序启动时检查一次更新
-        static mut HAS_CHECKED_UPDATE: bool = false;
         let current_time = ctx.input(|i| i.time);
-        unsafe {
-            if !HAS_CHECKED_UPDATE && current_time >= 1.0 { // 延迟1秒检查，确保程序完全启动
-                HAS_CHECKED_UPDATE = true;
-                
-                // 在后台线程中检查更新
-                let ctx_clone = ctx.clone();
-                std::thread::spawn(move || {
-                    match crate::update::check_for_updates() {
-                        Ok((update_available, latest_version)) => {
-                            // 更新全局状态
-                            UPDATE_AVAILABLE.store(update_available, std::sync::atomic::Ordering::Relaxed);
-                            *crate::LATEST_VERSION.lock().unwrap() = latest_version;
-                            // 通知主线程
-                            ctx_clone.request_repaint();
-                        },
-                        Err(e) => {
-                            println!("检查更新失败: {:?}", e);
-                        }
+        
+        // 程序启动时检查一次更新
+        if !self.has_checked_update && current_time >= 1.0 { // 延迟1秒检查，确保程序完全启动
+            self.has_checked_update = true;
+            
+            // 在后台线程中检查更新
+            let ctx_clone = ctx.clone();
+            std::thread::spawn(move || {
+                match crate::update::check_for_updates() {
+                    Ok((update_available, latest_version)) => {
+                        // 更新全局状态
+                        UPDATE_AVAILABLE.store(update_available, std::sync::atomic::Ordering::Relaxed);
+                        *crate::LATEST_VERSION.lock().unwrap() = latest_version;
+                        // 通知主线程
+                        ctx_clone.request_repaint();
+                    },
+                    Err(e) => {
+                        println!("检查更新失败: {:?}", e);
                     }
-                });
-            }
+                }
+            });
         }
         
         // 每500毫秒扫描一次串口，自动检测CH340设备
-        static mut LAST_SCAN_TIME: f64 = 0.0;
-        unsafe {
-            if current_time - LAST_SCAN_TIME >= 0.5 {
-                self.serial_manager.scan_ports();
-                LAST_SCAN_TIME = current_time;
-            }
+        if current_time - self.last_scan_time >= 0.5 {
+            self.serial_manager.scan_ports();
+            self.last_scan_time = current_time;
         }
         
         // 每60秒发送一次心跳，保持云端连接
-        static mut LAST_HEARTBEAT_TIME: f64 = 0.0;
-        unsafe {
-            if current_time - LAST_HEARTBEAT_TIME >= 60.0 {
-                if self.cloud_manager.connected {
-                    if let Err(e) = self.cloud_manager.send_heartbeat() {
-                        if self.cloud_manager.show_debug_info {
-                            self.received_data.push_str(&format!("心跳发送失败: {}\n", e));
-                        }
+        if current_time - self.last_heartbeat_time >= 60.0 {
+            if self.cloud_manager.connected {
+                if let Err(e) = self.cloud_manager.send_heartbeat() {
+                    if self.cloud_manager.show_debug_info {
+                        self.received_data.push_str(&format!("心跳发送失败: {}\n", e));
                     }
                 }
-                LAST_HEARTBEAT_TIME = current_time;
             }
+            self.last_heartbeat_time = current_time;
         }
         
         // 检查版本列表是否加载完成
@@ -485,10 +501,12 @@ impl eframe::App for SerialMonitor {
                                         self.show_versions_window = false;
                                         
                                         // 重置全局下载状态
-                                        unsafe {
-                                            DOWNLOAD_PROGRESS = 0.0;
-                                            DOWNLOAD_COMPLETED = false;
-                                            DOWNLOAD_RESULT = None;
+                                        {
+                                            let mut state = DOWNLOAD_STATE.lock().unwrap();
+                                            state.progress = 0.0;
+                                            state.completed = false;
+                                            state.success = false;
+                                            state.error = None;
                                         }
                                         
                                         // 在后台线程中下载指定版本
@@ -499,16 +517,23 @@ impl eframe::App for SerialMonitor {
                                             let result = update::download_specific_version_with_progress(&version_clone, move |progress| {
                                                 // 在主线程中更新进度
                                                 ctx_for_closure.request_repaint();
-                                                unsafe {
-                                                    DOWNLOAD_PROGRESS = progress;
-                                                }
+                                                let mut state = DOWNLOAD_STATE.lock().unwrap();
+                                                state.progress = progress;
                                             });
                                             
                                             // 下载完成后更新状态
                                             ctx_for_completion.request_repaint();
-                                            unsafe {
-                                                DOWNLOAD_COMPLETED = true;
-                                                DOWNLOAD_RESULT = Some(result);
+                                            let mut state = DOWNLOAD_STATE.lock().unwrap();
+                                            state.completed = true;
+                                            match result {
+                                                Ok(_) => {
+                                                    state.success = true;
+                                                    state.error = None;
+                                                }
+                                                Err(e) => {
+                                                    state.success = false;
+                                                    state.error = Some(format!("{:?}", e));
+                                                }
                                             }
                                         });
                                     }
@@ -532,28 +557,26 @@ impl eframe::App for SerialMonitor {
         // 渲染下载进度窗口
         if self.show_download_window {
             // 更新进度
-            unsafe {
-                self.download_progress = DOWNLOAD_PROGRESS;
-                if DOWNLOAD_COMPLETED {
+            {
+                let mut state = DOWNLOAD_STATE.lock().unwrap();
+                self.download_progress = state.progress;
+                if state.completed {
                     // 安全地获取下载结果
-                    let result = std::mem::replace(&mut *(&raw mut DOWNLOAD_RESULT), None);
+                    let success = state.success;
+                    let error = state.error.take();
                     // 重置下载状态
-                    DOWNLOAD_COMPLETED = false;
+                    state.completed = false;
                     
-                    match result {
-                        Some(Ok(_)) => {
-                            // 更新成功，提示用户重启软件
-                            self.error_message = "更新成功，是否立即重启软件？".to_string();
-                            self.show_error_window = true;
-                            self.show_download_window = false;
-                        }
-                        Some(Err(e)) => {
-                            // 更新失败，显示错误信息
-                            self.error_message = format!("更新失败: {:?}", e);
-                            self.show_error_window = true;
-                            self.show_download_window = false;
-                        }
-                        None => {}
+                    if success {
+                        // 更新成功，提示用户重启软件
+                        self.error_message = "更新成功，是否立即重启软件？".to_string();
+                        self.show_error_window = true;
+                        self.show_download_window = false;
+                    } else if let Some(err) = error {
+                        // 更新失败，显示错误信息
+                        self.error_message = format!("更新失败: {}", err);
+                        self.show_error_window = true;
+                        self.show_download_window = false;
                     }
                 }
             }
