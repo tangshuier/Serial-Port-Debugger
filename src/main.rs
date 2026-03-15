@@ -64,6 +64,8 @@ struct SerialMonitor {
     pub received_data: String,
     pub display_mode: DisplayMode,
     pub receive_encoding: String,
+    // 编码缓存，用于处理跨数据包的编码单元
+    pub encoding_cache: utils::EncodingCache,
     // 滚动位置跟踪
     pub should_auto_scroll: bool,
     // 窗口位置和大小
@@ -141,6 +143,7 @@ impl SerialMonitor {
                 _ => DisplayMode::UTF8,
             },
             receive_encoding: config.receive_encoding.clone(),
+            encoding_cache: utils::EncodingCache::default(),
             should_auto_scroll: config.should_auto_scroll,
             window_x: config.window_x,
             window_y: config.window_y,
@@ -254,14 +257,18 @@ impl SerialMonitor {
             // 根据显示模式格式化数据
             match self.display_mode {
                 DisplayMode::UTF8 => {
-                    // 使用 UTF-8 解析
-                    let text = utils::try_decode(&bytes, &self.receive_encoding);
-                    self.received_data.push_str(&text);
-                    
-                    // 如果启用了数据流转且连接到云端，将数据上传到云端
-                    if let Err(e) = self.dataflow_manager.process_serial_to_cloud(&text, &mut self.cloud_manager) {
-                        if self.cloud_manager.show_debug_info {
-                            self.received_data.push_str(&format!("数据流转上传失败: {}\n", e));
+                    // 使用编码缓存处理跨数据包的编码单元
+                    let processable_data = self.encoding_cache.process_data(&bytes);
+                    if !processable_data.is_empty() {
+                        // 使用 UTF-8 解析
+                        let text = utils::try_decode(&processable_data, &self.receive_encoding);
+                        self.received_data.push_str(&text);
+                        
+                        // 如果启用了数据流转且连接到云端，将数据上传到云端
+                        if let Err(e) = self.dataflow_manager.process_serial_to_cloud(&text, &mut self.cloud_manager) {
+                            if self.cloud_manager.show_debug_info {
+                                self.received_data.push_str(&format!("数据流转上传失败: {}\n", e));
+                            }
                         }
                     }
                 }

@@ -9,6 +9,97 @@ pub enum DisplayMode {
 // 导入必要的库
 use encoding_rs;
 
+// 尝试识别UTF-8字符，返回字符长度（0表示不是UTF-8）
+pub fn try_utf8(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    
+    let first_byte = bytes[0];
+    
+    if first_byte <= 0x7F {
+        // 1字节UTF-8
+        return 1;
+    } else if first_byte >= 0xC0 && first_byte <= 0xDF && bytes.len() >= 2 {
+        // 2字节UTF-8
+        if (bytes[1] & 0xC0) == 0x80 {
+            return 2;
+        }
+    } else if first_byte >= 0xE0 && first_byte <= 0xEF && bytes.len() >= 3 {
+        // 3字节UTF-8
+        if (bytes[1] & 0xC0) == 0x80 && (bytes[2] & 0xC0) == 0x80 {
+            return 3;
+        }
+    } else if first_byte >= 0xF0 && first_byte <= 0xF7 && bytes.len() >= 4 {
+        // 4字节UTF-8
+        if (bytes[1] & 0xC0) == 0x80 && (bytes[2] & 0xC0) == 0x80 && (bytes[3] & 0xC0) == 0x80 {
+            return 4;
+        }
+    }
+    
+    0
+}
+
+// 编码缓存结构，用于处理跨数据包的编码单元
+#[derive(Default)]
+pub struct EncodingCache {
+    pub buffer: Vec<u8>,
+}
+
+impl EncodingCache {
+    // 处理新数据，返回可解码的完整数据和剩余的缓存
+    pub fn process_data(&mut self, new_data: &[u8]) -> Vec<u8> {
+        // 将新数据添加到缓存
+        self.buffer.extend_from_slice(new_data);
+        
+        // 检查缓存中的数据是否可以完整解码
+        let total_len = self.buffer.len();
+        
+        // 从末尾开始检查，寻找完整的编码单元
+        let mut i = total_len;
+        while i > 0 {
+            // 检查是否是完整的UTF-8字符
+            let utf8_len = try_utf8(&self.buffer[..i]);
+            if utf8_len > 0 && utf8_len <= i {
+                break;
+            }
+            
+            // 检查是否是完整的GBK字符
+            if i >= 2 {
+                let first = self.buffer[i-2];
+                let second = self.buffer[i-1];
+                if (first >= 0x81 && first <= 0xFE) && 
+                   ((second >= 0x40 && second <= 0x7E) || (second >= 0x80 && second <= 0xFE)) {
+                    break;
+                }
+            }
+            
+            // 检查是否是ASCII字符
+            if self.buffer[i-1] <= 0x7F {
+                break;
+            }
+            
+            i -= 1;
+        }
+        
+        if i > 0 {
+            // 提取可解码的完整数据
+            let result = self.buffer[..i].to_vec();
+            // 保留剩余的缓存
+            self.buffer = self.buffer[i..].to_vec();
+            result
+        } else {
+            // 没有完整的编码单元，返回空
+            Vec::new()
+        }
+    }
+    
+    // 清空缓存
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+    }
+}
+
 // 智能分段解码，处理混合编码的情况
 pub fn smart_chunk_decode(bytes: &[u8]) -> String {
     let mut result = String::new();
@@ -126,37 +217,6 @@ pub fn get_gbk_char(bytes: &[u8]) -> (String, bool) {
     }
     
     (String::new(), false)
-}
-
-// 尝试识别UTF-8字符，返回字符长度（0表示不是UTF-8）
-pub fn try_utf8(bytes: &[u8]) -> usize {
-    if bytes.is_empty() {
-        return 0;
-    }
-    
-    let first_byte = bytes[0];
-    
-    if first_byte <= 0x7F {
-        // 1字节UTF-8
-        return 1;
-    } else if first_byte >= 0xC0 && first_byte <= 0xDF && bytes.len() >= 2 {
-        // 2字节UTF-8
-        if (bytes[1] & 0xC0) == 0x80 {
-            return 2;
-        }
-    } else if first_byte >= 0xE0 && first_byte <= 0xEF && bytes.len() >= 3 {
-        // 3字节UTF-8
-        if (bytes[1] & 0xC0) == 0x80 && (bytes[2] & 0xC0) == 0x80 {
-            return 3;
-        }
-    } else if first_byte >= 0xF0 && first_byte <= 0xF7 && bytes.len() >= 4 {
-        // 4字节UTF-8
-        if (bytes[1] & 0xC0) == 0x80 && (bytes[2] & 0xC0) == 0x80 && (bytes[3] & 0xC0) == 0x80 {
-            return 4;
-        }
-    }
-    
-    0
 }
 
 // 根据选择的编码解析数据
