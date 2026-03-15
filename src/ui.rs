@@ -157,47 +157,58 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                     } else {
                                         // 遍历快捷指令列表
                                         let mut indices_to_remove = Vec::new();
-                                        for (i, shortcut) in app.shortcuts.iter().enumerate() {
+                                        for (i, (shortcut, include_newline)) in app.shortcuts.iter().enumerate() {
                                             ui.horizontal(|ui| {
-                                                // 显示指令内容
-                                                ui.label(shortcut);
+                                                // 计算可用宽度
+                                                let available_width = ui.available_width();
+                                                let label_width = available_width * 0.4; // 指令文本占用40%宽度
                                                 
-                                                // 发送按钮
-                                                if ui.button("发送").clicked() {
-                                                    // 发送指令到串口
-                                                    let mut data_to_send = Vec::new();
-                                                    data_to_send.extend_from_slice(shortcut.as_bytes());
-                                                    
-                                                    // 添加换行符
-                                                    if app.send_newline {
-                                                        data_to_send.extend_from_slice(&[13, 10]); // CRLF
-                                                    }
-                                                    
-                                                    // 发送数据
-                                                    if let Err(e) = app.serial_manager.send_data(&data_to_send) {
-                                                        app.received_data.push_str(&format!("发送错误: {}\n", e));
-                                                    } else {
-                                                        // 在接收区域显示发送的数据
-                                                        let display_text = if app.send_newline {
-                                                            format!("{}\n", shortcut)
+                                                // 显示指令内容，设置最大宽度
+                                                ui.push_id(format!("shortcut_label_{}", i), |ui| {
+                                                    ui.set_width(label_width);
+                                                    ui.add(egui::Label::new(shortcut).wrap(true).truncate(true));
+                                                });
+                                                
+                                                // 按钮区域
+                                                ui.push_id(format!("shortcut_buttons_{}", i), |ui| {
+                                                    // 发送按钮
+                                                    if ui.button("发送").clicked() {
+                                                        // 发送指令到串口
+                                                        let mut data_to_send = Vec::new();
+                                                        data_to_send.extend_from_slice(shortcut.as_bytes());
+                                                        
+                                                        // 添加换行符
+                                                        if *include_newline {
+                                                            data_to_send.extend_from_slice(&[13, 10]); // CRLF
+                                                        }
+                                                        
+                                                        // 发送数据
+                                                        if let Err(e) = app.serial_manager.send_data(&data_to_send) {
+                                                            app.received_data.push_str(&format!("发送错误: {}\n", e));
                                                         } else {
-                                                            shortcut.clone()
-                                                        };
-                                                        app.received_data.push_str(&format!("发送: {}", display_text));
+                                                            // 在接收区域显示发送的数据
+                                                            let display_text = if *include_newline {
+                                                                format!("{}\n", shortcut)
+                                                            } else {
+                                                                shortcut.clone()
+                                                            };
+                                                            app.received_data.push_str(&format!("发送: {}", display_text));
+                                                        }
                                                     }
-                                                }
-                                                
-                                                // 编辑按钮
-                                                if ui.button("编辑").clicked() {
-                                                    app.new_shortcut = shortcut.clone();
-                                                    app.editing_shortcut_index = Some(i);
-                                                    app.show_shortcut_window = true;
-                                                }
-                                                
-                                                // 删除按钮
-                                                if ui.button("删除").clicked() {
-                                                    indices_to_remove.push(i);
-                                                }
+                                                    
+                                                    // 编辑按钮
+                                                    if ui.button("编辑").clicked() {
+                                                        app.new_shortcut = shortcut.clone();
+                                                        app.new_shortcut_newline = *include_newline;
+                                                        app.editing_shortcut_index = Some(i);
+                                                        app.show_shortcut_window = true;
+                                                    }
+                                                    
+                                                    // 删除按钮
+                                                    if ui.button("删除").clicked() {
+                                                        indices_to_remove.push(i);
+                                                    }
+                                                });
                                             });
                                             ui.add_space(5.0);
                                         }
@@ -1002,6 +1013,9 @@ pub fn render_shortcut_window(ctx: &egui::Context, app: &mut crate::SerialMonito
                 ui.label("指令内容:");
                 ui.text_edit_multiline(&mut app.new_shortcut);
                 
+                // 是否包含换行符选项
+                ui.checkbox(&mut app.new_shortcut_newline, "包含换行符");
+                
                 ui.add_space(20.0);
                 
                 ui.horizontal(|ui| {
@@ -1010,11 +1024,11 @@ pub fn render_shortcut_window(ctx: &egui::Context, app: &mut crate::SerialMonito
                             match app.editing_shortcut_index {
                                 Some(index) => {
                                     // 编辑现有指令
-                                    app.shortcuts[index] = app.new_shortcut.trim().to_string();
+                                    app.shortcuts[index] = (app.new_shortcut.trim().to_string(), app.new_shortcut_newline);
                                 }
                                 None => {
                                     // 添加新指令
-                                    app.shortcuts.push(app.new_shortcut.trim().to_string());
+                                    app.shortcuts.push((app.new_shortcut.trim().to_string(), app.new_shortcut_newline));
                                 }
                             }
                             app.save_config();

@@ -206,7 +206,7 @@ impl AppConfig {
                                 }
                                 "shortcuts" => {
                                     let value = value.trim_matches('"');
-                                    config.shortcuts = value.split(',').map(|s| s.trim().to_string()).collect();
+                                    config.shortcuts = value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                                 }
                                 // 兼容旧配置
                                 "cloud_subscribe_topic" => {

@@ -74,8 +74,9 @@ struct SerialMonitor {
     pub show_error_window: bool,
     pub error_message: String,
     // 快捷指令设置
-    pub shortcuts: Vec<String>,
+    pub shortcuts: Vec<(String, bool)>, // (指令内容, 是否包含换行符)
     pub new_shortcut: String,
+    pub new_shortcut_newline: bool, // 新指令是否包含换行符
     pub show_shortcut_window: bool,
     pub editing_shortcut_index: Option<usize>,
 
@@ -136,8 +137,9 @@ impl SerialMonitor {
             new_publish_topic: String::new(),
             show_error_window: false,
             error_message: String::new(),
-            shortcuts: config.shortcuts.clone(),
+            shortcuts: config.shortcuts.iter().filter(|s| !s.is_empty()).map(|s| (s.clone(), true)).collect(), // 默认包含换行符，过滤空指令
             new_shortcut: String::new(),
+            new_shortcut_newline: true, // 默认包含换行符
             show_shortcut_window: false,
             editing_shortcut_index: None,
             // 下载进度
@@ -211,7 +213,7 @@ impl SerialMonitor {
             show_cloud_debug_info: self.cloud_manager.show_debug_info,
             dataflow_enabled: self.dataflow_manager.enabled,
             use_dedicated_firmware: matches!(self.dataflow_manager.connection_mode, crate::dataflow::ConnectionMode::Firmware),
-            shortcuts: self.shortcuts.clone(),
+            shortcuts: self.shortcuts.iter().map(|(s, _)| s.clone()).collect(),
             window_x: self.window_x,
             window_y: self.window_y,
             window_width: self.window_width,
@@ -688,7 +690,7 @@ fn main() {
     // 运行应用程序
     let config_clone = config.clone();
     eframe::run_native(
-        "串口调试助手 v0.0.1",
+        "串口调试助手 v0.0.2",
         native_options,
         Box::new(move |cc| {
             // 设置字体
