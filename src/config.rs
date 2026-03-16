@@ -205,8 +205,52 @@ impl AppConfig {
                                     }
                                 }
                                 "shortcuts" => {
-                                    let value = value.trim_matches('"');
-                                    config.shortcuts = value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                                    // 处理 TOML 数组格式
+                                    let value = value.trim();
+                                    if value.starts_with('[') && value.ends_with(']') {
+                                        // 移除 []
+                                        let inner = value.trim_matches('[').trim_matches(']');
+                                        // 正确解析 TOML 数组元素，处理包含逗号的情况
+                                        let mut shortcuts = Vec::new();
+                                        let mut current = String::new();
+                                        let mut in_quotes = false;
+                                        
+                                        for c in inner.chars() {
+                                            match c {
+                                                '"' => {
+                                                    in_quotes = !in_quotes;
+                                                    current.push(c);
+                                                }
+                                                ',' if !in_quotes => {
+                                                    // 遇到逗号且不在引号内，说明是元素分隔符
+                                                    if !current.trim().is_empty() {
+                                                        let shortcut = current.trim().trim_matches('"').to_string();
+                                                        if !shortcut.is_empty() {
+                                                            shortcuts.push(shortcut);
+                                                        }
+                                                    }
+                                                    current.clear();
+                                                }
+                                                _ => {
+                                                    current.push(c);
+                                                }
+                                            }
+                                        }
+                                        
+                                        // 处理最后一个元素
+                                        if !current.trim().is_empty() {
+                                            let shortcut = current.trim().trim_matches('"').to_string();
+                                            if !shortcut.is_empty() {
+                                                shortcuts.push(shortcut);
+                                            }
+                                        }
+                                        
+                                        config.shortcuts = shortcuts;
+                                    } else {
+                                        // 兼容旧格式
+                                        let value = value.trim_matches('"');
+                                        config.shortcuts = value.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                                    }
                                 }
                                 // 兼容旧配置
                                 "cloud_subscribe_topic" => {
@@ -314,7 +358,15 @@ impl AppConfig {
             content.push_str(&format!("show_cloud_debug_info = {}\n", self.show_cloud_debug_info));
             content.push_str(&format!("dataflow_enabled = {}\n", self.dataflow_enabled));
             content.push_str(&format!("use_dedicated_firmware = {}\n", self.use_dedicated_firmware));
-            content.push_str(&format!("shortcuts = {:?}\n", self.shortcuts.join(", ")));
+            // 使用 TOML 数组格式保存快捷指令，支持包含逗号的指令
+            content.push_str("shortcuts = [");
+            for (i, shortcut) in self.shortcuts.iter().enumerate() {
+                if i > 0 {
+                    content.push_str(", ");
+                }
+                content.push_str(&format!("{:?}", shortcut));
+            }
+            content.push_str("]\n");
             
             // 正确处理 Option<f32> 类型
             if let Some(x) = self.window_x {

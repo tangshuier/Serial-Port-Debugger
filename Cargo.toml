@@ -1,6 +1,6 @@
 [package]
 name = "serial_monitor"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 
 [package.metadata.winres]
