@@ -1,6 +1,7 @@
 use eframe::egui;
 use encoding_rs;
 use serialport;
+use arboard::Clipboard;
 use crate::DisplayMode;
 
 // UI相关功能
@@ -57,8 +58,14 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                         ui.label("接收数据:");
                         ui.checkbox(&mut app.should_auto_scroll, "自动滚动");
                         if ui.button("复制数据").clicked() {
-                            // 使用egui提供的剪贴板功能
-                            ui.output_mut(|o| o.copied_text = app.received_data.clone());
+                            // 确保复制所有内容，处理特殊字符
+                            let text_to_copy = app.received_data.clone();
+                            // 使用arboard库的剪贴板功能，更可靠
+                            if let Ok(mut clipboard) = Clipboard::new() {
+                                if let Err(e) = clipboard.set_text(text_to_copy) {
+                                    println!("复制失败: {:?}", e);
+                                }
+                            }
                         }
                         if ui.button("清空数据").clicked() {
                             app.received_data.clear();
