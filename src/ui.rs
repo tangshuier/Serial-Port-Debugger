@@ -857,17 +857,32 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
     // 原有逻辑保持不变
     // 串口选择
     ui.push_id("serial_port_combo", |ui| {
+        app.serial_manager.scan_ports();
+        let available_ports = app.serial_manager.available_ports.clone();
+        let selected_port = app.serial_manager.selected_port.clone();
         egui::ComboBox::from_label("选择串口")
-            .selected_text(app.serial_manager.selected_port.as_deref().unwrap_or("未选择"))
+            .selected_text(selected_port.as_deref().unwrap_or("未选择"))
             .show_ui(ui, |ui| {
-                app.serial_manager.scan_ports();
-                for (i, port) in app.serial_manager.available_ports.iter().enumerate() {
+                for (i, port) in available_ports.iter().enumerate() {
                     ui.push_id(format!("port_{}", i), |ui| {
                         if ui.selectable_label(
-                            app.serial_manager.selected_port.as_deref() == Some(port),
+                            selected_port.as_deref() == Some(port),
                             port
                         ).clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.selected_port = Some(port.clone());
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                 }
@@ -902,14 +917,29 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
     ui.horizontal(|ui| {
         ui.label("波特率:");
         ui.push_id("baud_rate_combo", |ui| {
+            let baud_rate = app.serial_manager.baud_rate;
+            let baud_rates = app.serial_manager.baud_rates.clone();
             egui::ComboBox::from_label("")
-                .selected_text(&format!("{}", app.serial_manager.baud_rate))
+                .selected_text(&format!("{}", baud_rate))
                 .width(80.0)
                 .show_ui(ui, |ui| {
-                    for (i, rate) in app.serial_manager.baud_rates.iter().enumerate() {
+                    for (i, rate) in baud_rates.iter().enumerate() {
                         ui.push_id(format!("rate_{}", i), |ui| {
-                            if ui.selectable_label(app.serial_manager.baud_rate == *rate, &format!("{}", rate)).clicked() {
+                            if ui.selectable_label(baud_rate == *rate, &format!("{}", rate)).clicked() {
+                                let was_connected = app.serial_manager.is_connected;
                                 app.serial_manager.baud_rate = *rate;
+                                if was_connected {
+                                    app.serial_manager.disconnect();
+                                    app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                    match app.serial_manager.connect() {
+                                        Ok(_) => {
+                                            app.received_data.push_str("串口重新连接成功\n");
+                                        }
+                                        Err(e) => {
+                                            app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                        }
+                                    }
+                                }
                             }
                         });
                     }
@@ -920,8 +950,9 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
     ui.horizontal(|ui| {
         ui.label("数据位:");
         ui.push_id("data_bits_combo", |ui| {
+            let data_bits = app.serial_manager.data_bits;
             egui::ComboBox::from_label("")
-                .selected_text(match app.serial_manager.data_bits {
+                .selected_text(match data_bits {
                     serialport::DataBits::Five => "5",
                     serialport::DataBits::Six => "6",
                     serialport::DataBits::Seven => "7",
@@ -930,23 +961,75 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                 .width(60.0)
                 .show_ui(ui, |ui| {
                     ui.push_id("data_bits_5", |ui| {
-                        if ui.selectable_label(app.serial_manager.data_bits == serialport::DataBits::Five, "5").clicked() {
+                        if ui.selectable_label(data_bits == serialport::DataBits::Five, "5").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.data_bits = serialport::DataBits::Five;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                     ui.push_id("data_bits_6", |ui| {
-                        if ui.selectable_label(app.serial_manager.data_bits == serialport::DataBits::Six, "6").clicked() {
+                        if ui.selectable_label(data_bits == serialport::DataBits::Six, "6").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.data_bits = serialport::DataBits::Six;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                     ui.push_id("data_bits_7", |ui| {
-                        if ui.selectable_label(app.serial_manager.data_bits == serialport::DataBits::Seven, "7").clicked() {
+                        if ui.selectable_label(data_bits == serialport::DataBits::Seven, "7").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.data_bits = serialport::DataBits::Seven;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                     ui.push_id("data_bits_8", |ui| {
-                        if ui.selectable_label(app.serial_manager.data_bits == serialport::DataBits::Eight, "8").clicked() {
+                        if ui.selectable_label(data_bits == serialport::DataBits::Eight, "8").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.data_bits = serialport::DataBits::Eight;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                 });
@@ -956,8 +1039,9 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
     ui.horizontal(|ui| {
         ui.label("校验位:");
         ui.push_id("parity_combo", |ui| {
+            let parity = app.serial_manager.parity;
             egui::ComboBox::from_label("")
-                .selected_text(match app.serial_manager.parity {
+                .selected_text(match parity {
                     serialport::Parity::None => "无",
                     serialport::Parity::Odd => "奇",
                     serialport::Parity::Even => "偶",
@@ -965,18 +1049,57 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                 .width(60.0)
                 .show_ui(ui, |ui| {
                     ui.push_id("parity_none", |ui| {
-                        if ui.selectable_label(app.serial_manager.parity == serialport::Parity::None, "无").clicked() {
+                        if ui.selectable_label(parity == serialport::Parity::None, "无").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.parity = serialport::Parity::None;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                     ui.push_id("parity_odd", |ui| {
-                        if ui.selectable_label(app.serial_manager.parity == serialport::Parity::Odd, "奇").clicked() {
+                        if ui.selectable_label(parity == serialport::Parity::Odd, "奇").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.parity = serialport::Parity::Odd;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                     ui.push_id("parity_even", |ui| {
-                        if ui.selectable_label(app.serial_manager.parity == serialport::Parity::Even, "偶").clicked() {
+                        if ui.selectable_label(parity == serialport::Parity::Even, "偶").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.parity = serialport::Parity::Even;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                 });
@@ -986,21 +1109,48 @@ fn render_serial_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
     ui.horizontal(|ui| {
         ui.label("停止位:");
         ui.push_id("stop_bits_combo", |ui| {
+            let stop_bits = app.serial_manager.stop_bits;
             egui::ComboBox::from_label("")
-                .selected_text(match app.serial_manager.stop_bits {
+                .selected_text(match stop_bits {
                     serialport::StopBits::One => "1",
                     serialport::StopBits::Two => "2",
                 })
                 .width(60.0)
                 .show_ui(ui, |ui| {
                     ui.push_id("stop_bits_1", |ui| {
-                        if ui.selectable_label(app.serial_manager.stop_bits == serialport::StopBits::One, "1").clicked() {
+                        if ui.selectable_label(stop_bits == serialport::StopBits::One, "1").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.stop_bits = serialport::StopBits::One;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                     ui.push_id("stop_bits_2", |ui| {
-                        if ui.selectable_label(app.serial_manager.stop_bits == serialport::StopBits::Two, "2").clicked() {
+                        if ui.selectable_label(stop_bits == serialport::StopBits::Two, "2").clicked() {
+                            let was_connected = app.serial_manager.is_connected;
                             app.serial_manager.stop_bits = serialport::StopBits::Two;
+                            if was_connected {
+                                app.serial_manager.disconnect();
+                                app.received_data.push_str("串口参数已修改，正在重新连接...\n");
+                                match app.serial_manager.connect() {
+                                    Ok(_) => {
+                                        app.received_data.push_str("串口重新连接成功\n");
+                                    }
+                                    Err(e) => {
+                                        app.received_data.push_str(&format!("串口重新连接失败: {}\n", e));
+                                    }
+                                }
+                            }
                         }
                     });
                 });
