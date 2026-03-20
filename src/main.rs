@@ -77,6 +77,7 @@ struct SerialMonitor {
     pub send_data: String,
     pub send_encoding: String,
     pub send_newline: bool,
+    pub send_hex: bool,
     // 主题设置
     pub is_dark_mode: bool,
     // 右侧设置面板
@@ -152,6 +153,7 @@ impl SerialMonitor {
             send_data: String::new(),
             send_encoding: config.send_encoding.clone(),
             send_newline: config.send_newline,
+            send_hex: config.send_hex,
             is_dark_mode: config.is_dark_mode,
             show_settings_panel: config.show_settings_panel,
             current_tab: "串口设置".to_string(),
@@ -229,6 +231,7 @@ impl SerialMonitor {
             should_auto_scroll: self.should_auto_scroll,
             send_encoding: self.send_encoding.clone(),
             send_newline: self.send_newline,
+            send_hex: self.send_hex,
             is_dark_mode: self.is_dark_mode,
             show_settings_panel: self.show_settings_panel,
             use_cloud_communication: self.current_tab == "云端通信",

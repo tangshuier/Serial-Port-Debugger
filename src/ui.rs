@@ -172,9 +172,37 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                                 // 按钮区域
                                                 ui.push_id(format!("shortcut_buttons_{}", i), |ui| {
                                                     // 发送按钮
-                                                    if ui.button("发送").clicked() {
-                                                        // 发送指令到串口
-                                                        let mut data_to_send = Vec::new();
+                                                if ui.button("发送").clicked() {
+                                                    // 发送指令到串口
+                                                    let mut data_to_send = Vec::new();
+                                                    let mut display_text = String::new();
+                                                    
+                                                    if app.send_hex {
+                                                        // 十六进制发送模式
+                                                        let hex_str = shortcut.replace(" ", "");
+                                                        if hex_str.len() % 2 == 0 {
+                                                            for i in (0..hex_str.len()).step_by(2) {
+                                                                if let Ok(byte) = u8::from_str_radix(&hex_str[i..i+2], 16) {
+                                                                    data_to_send.push(byte);
+                                                                } else {
+                                                                    app.received_data.push_str("发送错误: 无效的十六进制格式\n");
+                                                                    data_to_send.clear();
+                                                                    break;
+                                                                }
+                                                            }
+                                                            if !data_to_send.is_empty() {
+                                                                // 显示十六进制格式
+                                                                display_text = hex_str.chars().collect::<Vec<char>>().chunks(2).map(|c| c.iter().collect::<String>()).collect::<Vec<String>>().join(" ");
+                                                                if *include_newline {
+                                                                    display_text.push_str("\n");
+                                                                }
+                                                            }
+                                                        } else {
+                                                            app.received_data.push_str("发送错误: 十六进制字符串长度必须为偶数\n");
+                                                            data_to_send.clear();
+                                                        }
+                                                    } else {
+                                                        // 普通字符串发送模式
                                                         data_to_send.extend_from_slice(shortcut.as_bytes());
                                                         
                                                         // 添加换行符
@@ -182,19 +210,24 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                                             data_to_send.extend_from_slice(&[13, 10]); // CRLF
                                                         }
                                                         
-                                                        // 发送数据
+                                                        // 显示普通文本格式
+                                                        display_text = if *include_newline {
+                                                            format!("{}\n", shortcut)
+                                                        } else {
+                                                            shortcut.clone()
+                                                        };
+                                                    }
+                                                    
+                                                    // 发送数据
+                                                    if !data_to_send.is_empty() {
                                                         if let Err(e) = app.serial_manager.send_data(&data_to_send) {
                                                             app.received_data.push_str(&format!("发送错误: {}\n", e));
                                                         } else {
                                                             // 在接收区域显示发送的数据
-                                                            let display_text = if *include_newline {
-                                                                format!("{}\n", shortcut)
-                                                            } else {
-                                                                shortcut.clone()
-                                                            };
                                                             app.received_data.push_str(&format!("发送: {}", display_text));
                                                         }
                                                     }
+                                                }
                                                     
                                                     // 编辑按钮
                                                     if ui.button("编辑").clicked() {
@@ -332,7 +365,7 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                     ui.label(&format!("正在下载专有固件程序到: {}", path.display()));
                                     
                                     // 实际的下载功能：复制专有固件程序文件夹到用户指定的位置
-                                    let source_dir = std::path::Path::new("z:\\串口调试助手\\serial_monitor\\专有固件程序");
+                                    let source_dir = std::path::Path::new("专有固件程序");
                                     let target_dir = path.join("专有固件程序");
                                     
                                     // 创建目标目录
@@ -379,7 +412,7 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                     ui.label(&format!("正在下载AT固件程序到: {}", path.display()));
                                     
                                     // 实际的下载功能：复制AT固件程序文件夹到用户指定的位置
-                                    let source_dir = std::path::Path::new("z:\\串口调试助手\\serial_monitor\\AT固件程序");
+                                    let source_dir = std::path::Path::new("AT固件程序");
                                     let target_dir = path.join("AT固件程序");
                                     
                                     // 创建目标目录
@@ -439,74 +472,106 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                 if ui.button("发送").clicked() && !app.send_data.is_empty() {
                     // 根据选择的编码格式处理数据
                     let mut data_to_send = Vec::new();
+                    let mut display_text = String::new();
                     
-                    match app.send_encoding.as_str() {
-                        "UTF-8" => {
-                            data_to_send.extend_from_slice(app.send_data.as_bytes());
+                    if app.send_hex {
+                        // 十六进制发送模式
+                        let hex_str = app.send_data.replace(" ", "");
+                        if hex_str.len() % 2 == 0 {
+                            for i in (0..hex_str.len()).step_by(2) {
+                                if let Ok(byte) = u8::from_str_radix(&hex_str[i..i+2], 16) {
+                                    data_to_send.push(byte);
+                                } else {
+                                    app.received_data.push_str("发送错误: 无效的十六进制格式\n");
+                                    data_to_send.clear();
+                                    break;
+                                }
+                            }
+                            if !data_to_send.is_empty() {
+                                // 显示十六进制格式
+                                display_text = hex_str.chars().collect::<Vec<char>>().chunks(2).map(|c| c.iter().collect::<String>()).collect::<Vec<String>>().join(" ");
+                                if app.send_newline {
+                                    display_text.push_str("\n");
+                                }
+                            }
+                        } else {
+                            app.received_data.push_str("发送错误: 十六进制字符串长度必须为偶数\n");
+                            data_to_send.clear();
                         }
-                        "GB2312" => {
-                            let (text, _, _) = encoding_rs::GBK.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "Big5" => {
-                            let (text, _, _) = encoding_rs::BIG5.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "EUC-JP" => {
-                            let (text, _, _) = encoding_rs::EUC_JP.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "Shift_JIS" => {
-                            let (text, _, _) = encoding_rs::SHIFT_JIS.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "KOI8-R" => {
-                            let (text, _, _) = encoding_rs::KOI8_R.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "Windows-1251" => {
-                            let (text, _, _) = encoding_rs::WINDOWS_1251.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "Windows-1252" => {
-                            let (text, _, _) = encoding_rs::WINDOWS_1252.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "UTF-16 LE" => {
-                            let (text, _, _) = encoding_rs::UTF_16LE.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "UTF-16 BE" => {
-                            let (text, _, _) = encoding_rs::UTF_16BE.encode(&app.send_data);
-                            data_to_send.extend_from_slice(&text);
-                        }
-                        "Latin1" | "ASCII" => {
-                            // Latin1 和 ASCII 编码：每个字符直接转换为对应的字节
-                            for c in app.send_data.chars() {
-                                data_to_send.push(c as u8);
+                    } else {
+                        // 普通字符串发送模式
+                        match app.send_encoding.as_str() {
+                            "UTF-8" => {
+                                data_to_send.extend_from_slice(app.send_data.as_bytes());
+                            }
+                            "GB2312" => {
+                                let (text, _, _) = encoding_rs::GBK.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "Big5" => {
+                                let (text, _, _) = encoding_rs::BIG5.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "EUC-JP" => {
+                                let (text, _, _) = encoding_rs::EUC_JP.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "Shift_JIS" => {
+                                let (text, _, _) = encoding_rs::SHIFT_JIS.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "KOI8-R" => {
+                                let (text, _, _) = encoding_rs::KOI8_R.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "Windows-1251" => {
+                                let (text, _, _) = encoding_rs::WINDOWS_1251.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "Windows-1252" => {
+                                let (text, _, _) = encoding_rs::WINDOWS_1252.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "UTF-16 LE" => {
+                                let (text, _, _) = encoding_rs::UTF_16LE.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "UTF-16 BE" => {
+                                let (text, _, _) = encoding_rs::UTF_16BE.encode(&app.send_data);
+                                data_to_send.extend_from_slice(&text);
+                            }
+                            "Latin1" | "ASCII" => {
+                                // Latin1 和 ASCII 编码：每个字符直接转换为对应的字节
+                                for c in app.send_data.chars() {
+                                    data_to_send.push(c as u8);
+                                }
+                            }
+                            _ => {
+                                data_to_send.extend_from_slice(app.send_data.as_bytes());
                             }
                         }
-                        _ => {
-                            data_to_send.extend_from_slice(app.send_data.as_bytes());
+                        
+                        // 添加换行符
+                        if app.send_newline {
+                            data_to_send.extend_from_slice(&[13, 10]); // CRLF
                         }
-                    }
-                    
-                    // 添加换行符
-                    if app.send_newline {
-                        data_to_send.extend_from_slice(&[13, 10]); // CRLF
-                    }
-                    
-                    // 使用serial_manager的send_data方法发送数据
-                    if let Err(e) = app.serial_manager.send_data(&data_to_send) {
-                        app.received_data.push_str(&format!("发送错误: {}\n", e));
-                    } else {
-                        // 在接收区域显示发送的数据
-                        let display_text = if app.send_newline {
+                        
+                        // 显示普通文本格式
+                        display_text = if app.send_newline {
                             format!("{}\n", app.send_data)
                         } else {
                             app.send_data.clone()
                         };
-                        app.received_data.push_str(&format!("发送: {}", display_text));
+                    }
+                    
+                    // 使用serial_manager的send_data方法发送数据
+                    if !data_to_send.is_empty() {
+                        if let Err(e) = app.serial_manager.send_data(&data_to_send) {
+                            app.received_data.push_str(&format!("发送错误: {}\n", e));
+                        } else {
+                            // 在接收区域显示发送的数据
+                            app.received_data.push_str(&format!("发送: {}", display_text));
+                        }
                     }
                 }
             });
@@ -588,6 +653,11 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                 // 换行符选项
                 ui.push_id("newline_checkbox", |ui| {
                     ui.checkbox(&mut app.send_newline, "包含换行符");
+                });
+                
+                // 十六进制发送选项
+                ui.push_id("hex_checkbox", |ui| {
+                    ui.checkbox(&mut app.send_hex, "十六进制发送");
                 });
             });
         });

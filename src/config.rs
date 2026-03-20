@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub should_auto_scroll: bool,
     pub send_encoding: String,
     pub send_newline: bool,
+    pub send_hex: bool,
     // 主题配置
     pub is_dark_mode: bool,
     // 右侧设置面板
@@ -56,6 +57,7 @@ pub struct AppConfig {
                     should_auto_scroll: true,
                     send_encoding: "UTF-8".to_string(),
                     send_newline: false,
+                    send_hex: false,
                     is_dark_mode: false,
                     show_settings_panel: false,
                     use_cloud_communication: false,
@@ -152,6 +154,11 @@ impl AppConfig {
                                 "send_newline" => {
                                     if let Ok(v) = value.parse::<bool>() {
                                         config.send_newline = v;
+                                    }
+                                }
+                                "send_hex" => {
+                                    if let Ok(v) = value.parse::<bool>() {
+                                        config.send_hex = v;
                                     }
                                 }
                                 "is_dark_mode" => {
@@ -347,6 +354,7 @@ impl AppConfig {
             content.push_str(&format!("should_auto_scroll = {}\n", self.should_auto_scroll));
             content.push_str(&format!("send_encoding = {:?}\n", self.send_encoding));
             content.push_str(&format!("send_newline = {}\n", self.send_newline));
+            content.push_str(&format!("send_hex = {}\n", self.send_hex));
             content.push_str(&format!("is_dark_mode = {}\n", self.is_dark_mode));
             content.push_str(&format!("show_settings_panel = {}\n", self.show_settings_panel));
             content.push_str(&format!("use_cloud_communication = {}\n", self.use_cloud_communication));
