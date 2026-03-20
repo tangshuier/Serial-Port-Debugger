@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub display_mode: String,
     pub receive_encoding: String,
     pub should_auto_scroll: bool,
+    pub show_timestamp: bool,
     pub send_encoding: String,
     pub send_newline: bool,
     pub send_hex: bool,
@@ -55,6 +56,7 @@ pub struct AppConfig {
                     display_mode: "UTF8".to_string(),
                     receive_encoding: "UTF-8".to_string(),
                     should_auto_scroll: true,
+                    show_timestamp: false,
                     send_encoding: "UTF-8".to_string(),
                     send_newline: false,
                     send_hex: false,
@@ -145,6 +147,11 @@ impl AppConfig {
                                 "should_auto_scroll" => {
                                     if let Ok(v) = value.parse::<bool>() {
                                         config.should_auto_scroll = v;
+                                    }
+                                }
+                                "show_timestamp" => {
+                                    if let Ok(v) = value.parse::<bool>() {
+                                        config.show_timestamp = v;
                                     }
                                 }
                                 "send_encoding" => {
@@ -352,6 +359,7 @@ impl AppConfig {
             content.push_str(&format!("display_mode = {:?}\n", self.display_mode));
             content.push_str(&format!("receive_encoding = {:?}\n", self.receive_encoding));
             content.push_str(&format!("should_auto_scroll = {}\n", self.should_auto_scroll));
+            content.push_str(&format!("show_timestamp = {}\n", self.show_timestamp));
             content.push_str(&format!("send_encoding = {:?}\n", self.send_encoding));
             content.push_str(&format!("send_newline = {}\n", self.send_newline));
             content.push_str(&format!("send_hex = {}\n", self.send_hex));

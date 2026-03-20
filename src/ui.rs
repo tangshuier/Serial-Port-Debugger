@@ -1,7 +1,6 @@
 use eframe::egui;
 use encoding_rs;
 use serialport;
-use arboard::Clipboard;
 use crate::DisplayMode;
 
 // UI相关功能
@@ -58,14 +57,8 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                         ui.label("接收数据:");
                         ui.checkbox(&mut app.should_auto_scroll, "自动滚动");
                         if ui.button("复制数据").clicked() {
-                            // 确保复制所有内容，处理特殊字符
-                            let text_to_copy = app.received_data.clone();
-                            // 使用arboard库的剪贴板功能，更可靠
-                            if let Ok(mut clipboard) = Clipboard::new() {
-                                if let Err(e) = clipboard.set_text(text_to_copy) {
-                                    println!("复制失败: {:?}", e);
-                                }
-                            }
+                            // 使用egui提供的剪贴板功能
+                            ui.output_mut(|o| o.copied_text = app.received_data.clone());
                         }
                         if ui.button("清空数据").clicked() {
                             app.received_data.clear();
@@ -207,6 +200,8 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                                                 if *include_newline {
                                                                     display_text.push_str("\n");
                                                                 }
+                                                                // 添加上传提示
+                                                                display_text = format!("发送: {}", display_text);
                                                             }
                                                         } else {
                                                             app.received_data.push_str("发送错误: 十六进制字符串长度必须为偶数\n");
@@ -223,9 +218,9 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                                         
                                                         // 显示普通文本格式
                                                         display_text = if *include_newline {
-                                                            format!("{}\n", shortcut)
+                                                            format!("发送: {}\n", shortcut)
                                                         } else {
-                                                            shortcut.clone()
+                                                            format!("发送: {}", shortcut)
                                                         };
                                                     }
                                                     
@@ -235,7 +230,13 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                                             app.received_data.push_str(&format!("发送错误: {}\n", e));
                                                         } else {
                                                             // 在接收区域显示发送的数据
-                                                            app.received_data.push_str(&format!("发送: {}", display_text));
+                                                            let timestamp = if app.show_timestamp {
+                                                                let now = chrono::Local::now();
+                                                                format!("[{}] ", now.format("%Y-%m-%d %H:%M:%S"))
+                                                            } else {
+                                                                String::new()
+                                                            };
+                                                            app.received_data.push_str(&format!("{}{}", timestamp, display_text));
                                                         }
                                                     }
                                                 }
@@ -504,6 +505,8 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                                 if app.send_newline {
                                     display_text.push_str("\n");
                                 }
+                                // 添加上传提示
+                                display_text = format!("发送: {}", display_text);
                             }
                         } else {
                             app.received_data.push_str("发送错误: 十六进制字符串长度必须为偶数\n");
@@ -581,7 +584,13 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                             app.received_data.push_str(&format!("发送错误: {}\n", e));
                         } else {
                             // 在接收区域显示发送的数据
-                            app.received_data.push_str(&format!("发送: {}", display_text));
+                            let timestamp = if app.show_timestamp {
+                                let now = chrono::Local::now();
+                                format!("[{}] ", now.format("%Y-%m-%d %H:%M:%S"))
+                            } else {
+                                String::new()
+                            };
+                            app.received_data.push_str(&format!("{}{}", timestamp, display_text));
                         }
                     }
                 }
@@ -1297,6 +1306,14 @@ fn render_display_settings(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                 app.display_mode = DisplayMode::Binary;
             }
         });
+    });
+    
+    ui.add_space(10.0);
+    
+    // 时间戳设置
+    ui.horizontal(|ui| {
+        ui.label("时间戳:");
+        ui.checkbox(&mut app.show_timestamp, "显示时间戳");
     });
     
     ui.add_space(10.0);

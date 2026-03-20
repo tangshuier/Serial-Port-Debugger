@@ -64,6 +64,7 @@ struct SerialMonitor {
     pub received_data: String,
     pub display_mode: DisplayMode,
     pub receive_encoding: String,
+    pub show_timestamp: bool,
     // 编码缓存，用于处理跨数据包的编码单元
     pub encoding_cache: utils::EncodingCache,
     // 滚动位置跟踪
@@ -144,6 +145,7 @@ impl SerialMonitor {
                 _ => DisplayMode::UTF8,
             },
             receive_encoding: config.receive_encoding.clone(),
+            show_timestamp: config.show_timestamp,
             encoding_cache: utils::EncodingCache::default(),
             should_auto_scroll: config.should_auto_scroll,
             window_x: config.window_x,
@@ -229,6 +231,7 @@ impl SerialMonitor {
             }.to_string(),
             receive_encoding: self.receive_encoding.clone(),
             should_auto_scroll: self.should_auto_scroll,
+            show_timestamp: self.show_timestamp,
             send_encoding: self.send_encoding.clone(),
             send_newline: self.send_newline,
             send_hex: self.send_hex,
@@ -257,6 +260,14 @@ impl SerialMonitor {
     // 处理接收到的数据
     fn process_received_data(&mut self) {
         while let Some(bytes) = self.serial_manager.process_received_data() {
+            // 获取当前时间
+            let timestamp = if self.show_timestamp {
+                let now = chrono::Local::now();
+                format!("[{}] ", now.format("%Y-%m-%d %H:%M:%S"))
+            } else {
+                String::new()
+            };
+            
             // 根据显示模式格式化数据
             match self.display_mode {
                 DisplayMode::UTF8 => {
@@ -265,6 +276,7 @@ impl SerialMonitor {
                     if !processable_data.is_empty() {
                         // 使用 UTF-8 解析
                         let text = utils::try_decode(&processable_data, &self.receive_encoding);
+                        self.received_data.push_str(&timestamp);
                         self.received_data.push_str(&text);
                         
                         // 如果启用了数据流转且连接到云端，将数据上传到云端
@@ -277,11 +289,13 @@ impl SerialMonitor {
                 }
                 DisplayMode::Hex => {
                     let hex_str = bytes.iter().map(|b| format!("{:02X} ", b)).collect::<String>();
+                    self.received_data.push_str(&timestamp);
                     self.received_data.push_str(&hex_str);
                     self.received_data.push('\n');
                 }
                 DisplayMode::Binary => {
                     let bin_str = bytes.iter().map(|b| format!("{:08b} ", b)).collect::<String>();
+                    self.received_data.push_str(&timestamp);
                     self.received_data.push_str(&bin_str);
                     self.received_data.push('\n');
                 }
