@@ -56,6 +56,10 @@ pub fn render_ui(ui: &mut egui::Ui, app: &mut crate::SerialMonitor) {
                     ui.horizontal(|ui| {
                         ui.label("接收数据:");
                         ui.checkbox(&mut app.should_auto_scroll, "自动滚动");
+                        if ui.button("复制数据").clicked() {
+                            // 使用egui提供的剪贴板功能
+                            ui.output_mut(|o| o.copied_text = app.received_data.clone());
+                        }
                         if ui.button("清空数据").clicked() {
                             app.received_data.clear();
                         }
